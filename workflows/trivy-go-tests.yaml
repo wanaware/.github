@@ -1,0 +1,97 @@
+name: Trivy Scan and Go Tests
+
+on:
+  workflow_call:
+    inputs:
+      run_go_tests:
+        description: 'Enable Go module download and tests (set to true for Go repos)'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      GH_ACCESS_TOKEN:
+        description: 'GitHub access token for private repo access (required only if run_go_tests is true)'
+        required: true
+  pull_request:
+    branches:
+      - dev
+      - stage
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  trivy-scan-and-test:
+    name: Run Trivy Scan and Go Tests
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Go environment for private repo access
+        if: ${{ inputs.run_go_tests }}
+        run: |
+          git config --global url."https://${{ secrets.GH_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          export GOPRIVATE=github.com/wanaware
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}        
+
+      - name: Download Go Modules
+        if: ${{ inputs.run_go_tests }}
+        run: go mod download
+
+      - name: Run Go Mod Tidy
+        if: ${{ inputs.run_go_tests }}
+        run: go mod tidy
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'table'
+          output: 'trivy-results.txt'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '1'  
+
+      - name: Comment Trivy Results on the Pull Request
+        if: always()
+        run: |
+          echo '### Trivy Scan Results' > comment_trivy.md
+          if [ -s trivy-results.txt ]; then
+            echo '#### Vulnerabilities Found' >> comment_trivy.md
+            echo '```' >> comment_trivy.md
+            cat trivy-results.txt >> comment_trivy.md
+            echo '```' >> comment_trivy.md
+          else
+            echo '#### No vulnerabilities found :white_check_mark:' >> comment_trivy.md
+          fi
+          
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_trivy.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Go Unit Tests and Comment Results
+        if: ${{ inputs.run_go_tests }}
+        run: |
+          echo '### Go Unit Test Results' > comment_go_tests.md
+          echo '| Test Name | Status |' >> comment_go_tests.md
+          echo '| --------- | ------ |' >> comment_go_tests.md
+
+          # Run Go tests and check for failures in real-time
+          go test -v ./test/... | grep -E '^(--- PASS|--- FAIL)' | sed -E 's/^(--- PASS: )(.*)/\|\2\|Pass\|/; s/^(--- FAIL: )(.*)/\|\2\|Fail\|/' >> comment_go_tests.md
+          
+          # Post test results to PR
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_go_tests.md
+
+          # Check for failed tests and exit if any test fails
+          if go test -v ./test/... | grep -q '^--- FAIL'; then
+            echo "There are failed tests. Failing the job."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

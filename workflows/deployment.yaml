@@ -1,0 +1,282 @@
+name: Build and Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: 'Deployment environment (development, staging, production)'
+        required: false
+        default: 'development'
+        type: string
+      service_name:
+        description: 'Service name (used in release tags and GCS paths)'
+        required: true
+        type: string
+      image_path:
+        description: 'Image path within the registry (e.g. fleet-manager/fleet-manager)'
+        required: true
+        type: string
+      deploy_type:
+        description: 'Deployment target: gke | cloudrun-service | cloudrun-job'
+        required: false
+        default: 'gke'
+        type: string
+      deployment_name:
+        description: 'K8s deployment name for kubectl rollout restart (required if deploy_type=gke)'
+        required: false
+        default: ''
+        type: string
+      namespace:
+        description: 'K8s namespace (required if deploy_type=gke)'
+        required: false
+        default: ''
+        type: string
+      cloudrun_name:
+        description: 'Cloud Run service or job name (required if deploy_type != gke)'
+        required: false
+        default: ''
+        type: string
+      docker_context:
+        description: 'Docker build context path'
+        required: false
+        default: '.'
+        type: string
+      generate_docs:
+        description: 'Run graphdoc generation and upload to GCS'
+        required: false
+        default: false
+        type: boolean
+      docs_script:
+        description: 'Path to Go documentation generation script'
+        required: false
+        default: './scripts/generate-documentation.go'
+        type: string
+      caller_repository:
+        description: 'Caller repository for artifact download (e.g. wanaware/function-integrator)'
+        required: false
+        default: ''
+        type: string
+      caller_run_id:
+        description: 'Caller workflow run ID for artifact download'
+        required: false
+        default: ''
+        type: string
+      google_creds:
+        description: 'Whether to write GOOGLE_CREDS secret to google-creds.json'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      GCP_SA_KEY:
+        required: false
+      GCP_PROJECT:
+        required: false
+      GCP_REGISTRY:
+        required: false
+      GOOGLE_CREDS:
+        required: false
+      GH_ACCESS_TOKEN:
+        required: false
+      CLUSTER_NAME:
+        required: false
+      CLUSTER_REGION:
+        required: false
+      BUCKET_NAME:
+        required: false
+
+jobs:
+  deploy:
+    name: Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+
+    environment: ${{ inputs.environment_name }}
+
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Create Service Account File
+        run: echo '${{ env.GCP_SA_KEY }}' > ${{ github.workspace }}/service-account.json
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ env.GCP_SA_KEY }}'
+
+      - name: Configure Docker to use the gcloud command-line tool as a credential helper
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
+
+      - name: Download .env artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: env-file
+          path: ${{ inputs.docker_context }}
+
+      - name: Write google-creds.json
+        if: ${{ inputs.google_creds }}
+        run: echo '${{ secrets.GOOGLE_CREDS }}' > ${{ inputs.docker_context }}/google-creds.json
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ inputs.docker_context }}
+          push: true
+          tags: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+          build-args: |
+            GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+
+      # --- GKE deploy ---
+      - name: Get GKE Credentials
+        if: ${{ inputs.deploy_type == 'gke' }}
+        uses: google-github-actions/get-gke-credentials@v1
+        with:
+          cluster_name: ${{ secrets.CLUSTER_NAME }}
+          location: ${{ secrets.CLUSTER_REGION }}
+          credentials: ${{ env.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Rollout restart (GKE)
+        if: ${{ inputs.deploy_type == 'gke' }}
+        run: kubectl rollout restart deployment/${{ inputs.deployment_name }} -n ${{ inputs.namespace }}
+
+      # --- Cloud Run service deploy ---
+      - name: Deploy Cloud Run service
+        if: ${{ inputs.deploy_type == 'cloudrun-service' }}
+        run: |
+          gcloud run deploy ${{ inputs.cloudrun_name }} \
+            --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
+            --region ${{ secrets.CLUSTER_REGION }} \
+            --project ${{ secrets.GCP_PROJECT }}
+
+      # --- Cloud Run job deploy ---
+      - name: Deploy Cloud Run job
+        if: ${{ inputs.deploy_type == 'cloudrun-job' }}
+        run: |
+          gcloud run jobs update ${{ inputs.cloudrun_name }} \
+            --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
+            --region ${{ secrets.CLUSTER_REGION }} \
+            --project ${{ secrets.GCP_PROJECT }}
+
+      # --- Optional: graphdoc generation ---
+      - name: Set up Go for private modules
+        if: ${{ inputs.generate_docs }}
+        run: |
+          git config --global url."https://$GH_ACCESS_TOKEN@github.com/".insteadOf "https://github.com/"
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+
+      - name: Install graphdoc
+        if: ${{ inputs.generate_docs }}
+        run: npm install -g @2fd/graphdoc
+
+      - name: Generate documentation
+        if: ${{ inputs.generate_docs }}
+        run: go run ${{ inputs.docs_script }}
+        env:
+          GOPRIVATE: github.com/wanaware
+
+      - name: Generate GraphQL docs
+        if: ${{ inputs.generate_docs }}
+        run: graphdoc -s ./generated-schema.graphql -o output-folder -f
+
+      # --- GitHub release + GCS history ---
+      - name: Mark deployment success
+        id: deploy_status
+        run: echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Create release and update GCS history
+        if: steps.deploy_status.outputs.success == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force --prune --quiet
+          sudo apt-get update && sudo apt-get install -y jq
+
+          SHORTSHA=$(git rev-parse --short "$GITHUB_SHA")
+          DATE=$(TZ=Asia/Karachi date +%Y.%m.%d.%H%M)
+
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            ENV="prod"
+            ENV_NAME="production"
+            IS_PRERELEASE="false"
+          elif [[ "${{ github.ref }}" == "refs/heads/stage" ]]; then
+            ENV="stage"
+            ENV_NAME="staging"
+            IS_PRERELEASE="true"
+          else
+            ENV="dev"
+            ENV_NAME="development"
+            IS_PRERELEASE="true"
+          fi
+
+          TAG="${ENV}-${DATE}-${SHORTSHA}"
+          TITLE="[$ENV] $DATE"
+
+          if git tag -l "$ENV-*-$SHORTSHA" | grep -q .; then
+            echo "Release already exists for this commit, skipping."
+          else
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              gh release create "$TAG" \
+                --target ${{ github.ref_name }} \
+                --title "$TITLE" \
+                --generate-notes \
+                --prerelease
+            else
+              gh release create "$TAG" \
+                --target ${{ github.ref_name }} \
+                --title "$TITLE" \
+                --generate-notes
+            fi
+          fi
+
+          RELEASE_NOTES=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.body' || echo "No release notes available")
+
+          PR_DETAILS="[]"
+          PR_NUMBERS=$(echo "$RELEASE_NOTES" | grep -oE '(#|pull/)[0-9]+' | grep -oE '[0-9]+' | sort -u || echo "")
+
+          if [[ -n "$PR_NUMBERS" ]]; then
+            PR_DETAILS="["
+            FIRST=true
+            for PR_NUM in $PR_NUMBERS; do
+              PR_JSON=$(gh api repos/${{ github.repository }}/pulls/$PR_NUM --jq '{
+                number: .number,
+                title: .title,
+                body: .body,
+                user: .user.login
+              }' 2>/dev/null || echo "")
+              if [[ -n "$PR_JSON" ]]; then
+                if [[ "$FIRST" == "true" ]]; then FIRST=false; else PR_DETAILS="${PR_DETAILS},"; fi
+                PR_DETAILS="${PR_DETAILS}${PR_JSON}"
+              fi
+            done
+            PR_DETAILS="${PR_DETAILS}]"
+          fi
+
+          echo "$PR_DETAILS" > pr-details.json
+
+          chmod +x ./.github/scripts/gcs-history.sh
+          ./.github/scripts/gcs-history.sh \
+            "${{ secrets.BUCKET_NAME }}" \
+            "$ENV" \
+            "$TAG" \
+            "$TITLE" \
+            "$ENV_NAME" \
+            "$DATE" \
+            "$RELEASE_NOTES"
+
+      - name: Upload docs to GCS
+        if: ${{ inputs.generate_docs }}
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: "${{ github.workspace }}/service-account.json"
+        run: |
+          gcloud auth activate-service-account --key-file="${{ github.workspace }}/service-account.json"
+          gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}

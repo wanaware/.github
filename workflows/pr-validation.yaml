@@ -1,0 +1,143 @@
+name: PR Validation
+
+on:
+  workflow_call:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches:
+      - dev
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-pr-title:
+    name: Validate PR Title
+    runs-on: ubuntu-latest
+    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "pulse", "solution-deployment-platform", "azure-integrator", "gcp-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
+
+    steps:
+      - name: Validate PR title format
+        run: |
+          # Get the PR title
+          pr_title="${{ github.event.pull_request.title }}"
+
+          echo "Validating PR title: $pr_title"
+
+          # PR title validation rules
+          regex_with_ticket='^(feat|bug|task)\([A-Z]+-[0-9]+\): .+'
+          regex_without_ticket='^(fix|chore): .+'
+
+          if echo "$pr_title" | grep -Eq "$regex_with_ticket" || echo "$pr_title" | grep -Eq "$regex_without_ticket"; then
+            echo "✅ PR title format is valid: $pr_title"
+          else
+            echo "❌ PR title is invalid: $pr_title"
+            echo ""
+            echo "Expected formats:"
+            echo "- <type>(JIRA-TICKET): Description (for feat/bug/task)"
+            echo "- <type>: Description (for fix/chore)"
+            echo ""
+            echo "Rules:"
+            echo "- type = feat | bug | task | fix | chore"
+            echo "- JIRA = uppercase letters + hyphen + digits (e.g. TMF-920) - required for feat/bug/task only"
+            echo "- Description = non-empty description (minimum 15 characters, at least 3 words)"
+            echo ""
+            echo "Examples:"
+            echo "- feat(TMF-920): add user signup endpoint with email verification"
+            echo "- bug(TMF-921): resolve login validation bug on empty password"
+            echo "- task(TMF-922): update redis configuration for staging"
+            echo "- fix: update dependencies to resolve security vulnerability"
+            echo "- chore: cleanup unused imports in resolver package"
+            echo ""
+            echo "❌ PR title validation failed. Please update the PR title before merging."
+            exit 1
+          fi
+
+          # Extract description (everything after ": ")
+          description=$(echo "$pr_title" | sed 's/^[^:]*: //')
+
+          # Check minimum length
+          desc_length=${#description}
+          if [[ $desc_length -lt 15 ]]; then
+            echo "❌ PR title description is too short ($desc_length chars). Minimum 15 characters required."
+            echo "Current description: '$description'"
+            echo ""
+            echo "Write a meaningful description that explains what this PR does."
+            exit 1
+          fi
+
+          # Check minimum word count
+          word_count=$(echo "$description" | wc -w | tr -d ' ')
+          if [[ $word_count -lt 3 ]]; then
+            echo "❌ PR title description must have at least 3 words (found $word_count)."
+            echo "Current description: '$description'"
+            echo ""
+            echo "Write a meaningful description that explains what this PR does."
+            exit 1
+          fi
+
+          # Block known lazy/vague patterns
+          lazy_patterns='(^(abc|test|fix stuff|update|changes|wip|tmp|asdf|todo|misc|stuff|done|fixes|updates|testing)$)'
+          if echo "$description" | grep -Eiq "$lazy_patterns"; then
+            echo "❌ PR title description is too vague: '$description'"
+            echo ""
+            echo "Please write a meaningful description that explains what this PR actually does."
+            echo "Bad:  task(TMF-123): update"
+            echo "Good: task(TMF-123): update redis connection pool size for production"
+            exit 1
+          fi
+
+          echo "✅ PR title is valid: $pr_title"
+          echo "PR title follows the required format."
+
+  validate-pr-description:
+    name: Validate PR Description
+    runs-on: ubuntu-latest
+    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "pulse", "solution-deployment-platform", "azure-integrator", "gcp-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
+
+    steps:
+      - name: Validate PR description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "Validating PR description..."
+
+          # Check that required sections exist (exact heading match)
+          missing_sections=""
+
+          if ! echo "$PR_BODY" | grep -qE "^## Summary[[:space:]]*$"; then
+            missing_sections="${missing_sections}\n- ## Summary"
+          fi
+
+          if ! echo "$PR_BODY" | grep -qE "^## Why[[:space:]]*$"; then
+            missing_sections="${missing_sections}\n- ## Why"
+          fi
+
+          if [[ -n "$missing_sections" ]]; then
+            echo "❌ PR description is missing required sections:"
+            echo -e "$missing_sections"
+            echo ""
+            echo "Please use the PR template and fill in all required sections."
+            echo "Required: ## Summary, ## Why"
+            echo "Optional: ## Dependencies, ## Test Plan"
+            exit 1
+          fi
+
+          # Validate Summary section has minimum content
+          # Strip HTML comments and whitespace before counting
+          summary_content=$(echo "$PR_BODY" | sed -n '/^## Summary[[:space:]]*$/,/^## /p' | grep -v '^## ' | sed 's/<!--.*-->//g' | tr -d '[:space:]')
+          if [[ ${#summary_content} -lt 20 ]]; then
+            echo "❌ ## Summary section is too short or empty. Please provide a meaningful summary (minimum 20 characters)."
+            exit 1
+          fi
+
+          # Validate Why section has minimum content
+          # Strip HTML comments and whitespace before counting
+          why_content=$(echo "$PR_BODY" | sed -n '/^## Why[[:space:]]*$/,/^## /p' | grep -v '^## ' | sed 's/<!--.*-->//g' | tr -d '[:space:]')
+          if [[ ${#why_content} -lt 20 ]]; then
+            echo "❌ ## Why section is too short or empty. Please explain why this change is needed (minimum 20 characters)."
+            exit 1
+          fi
+
+          echo "✅ PR description is valid."

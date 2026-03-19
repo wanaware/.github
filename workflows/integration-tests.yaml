@@ -1,0 +1,462 @@
+name: Integration Tests
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: 'Go version to use'
+        required: false
+        default: '1.24.6'
+        type: string
+      server_cmd:
+        description: 'Go main file to run the server (e.g. ./cmd/fleet-manager/main.go)'
+        required: true
+        type: string
+      wait_for_it_path:
+        description: 'Path to wait-for-it.sh script'
+        required: false
+        default: './scripts/wait-for-it.sh'
+        type: string
+      postman_collection:
+        description: 'Path to the Postman collection JSON file (required if not using test_runner_script)'
+        required: false
+        default: ''
+        type: string
+      newman_extra_args:
+        description: 'Extra args to pass to newman (e.g. --delay-request 500)'
+        required: false
+        default: ''
+        type: string
+      use_redis:
+        description: 'Start a local Redis instance'
+        required: false
+        default: true
+        type: boolean
+      use_cloud_sql:
+        description: 'Start Cloud SQL Proxy and connect to the DB'
+        required: false
+        default: true
+        type: boolean
+      server_env:
+        description: 'Multiline env vars to export before starting the Go server (KEY=VALUE format)'
+        required: false
+        default: ''
+        type: string
+      access_token_script:
+        description: 'Path to Python script that fetches access tokens'
+        required: false
+        default: './scripts/get_access_token.py'
+        type: string
+      newman_env_json:
+        description: 'JSON string for Newman environment variables (injected into newman_env.json)'
+        required: false
+        default: ''
+        type: string
+      cleanup_script:
+        description: 'Path to cleanup script to run before tests (e.g. ./shell_scripts/cleanup-test-data.sh)'
+        required: false
+        default: ''
+        type: string
+      pre_test_setup_script:
+        description: 'Path to Python script for pre-test setup (e.g. ./shell_scripts/create_and_capture_ids.py)'
+        required: false
+        default: ''
+        type: string
+      delete_data_tags_script:
+        description: 'Path to Python script to delete data tags before tests (e.g. ./shell_scripts/delete_data_tags.py)'
+        required: false
+        default: ''
+        type: string
+      test_runner_script:
+        description: 'Path to custom test runner script instead of direct newman (e.g. ./shell_scripts/run-all-api-tests.sh)'
+        required: false
+        default: ''
+        type: string
+      post_test_cleanup_script:
+        description: 'Path to Python script for post-test cleanup (e.g. ./shell_scripts/delete_nodes.py)'
+        required: false
+        default: ''
+        type: string
+      post_test_cleanup_args:
+        description: 'Arguments for post-test cleanup script (e.g. Function for node type)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  integration-test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Download .env artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: env-file
+          path: .
+
+      - name: Load environment variables from .env
+        run: |
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            # Only export lines matching KEY=VALUE pattern
+            if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+              echo "$line" >> $GITHUB_ENV
+            fi
+          done < .env
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ inputs.go_version }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@1bee7de035d65ec5da40a31f8589e240eba8fde5
+        with:
+          service_account_key: ${{ secrets.GOOGLE_CREDS }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GOOGLE_CREDS }}'
+
+      - name: Create Service Account File
+        run: echo '${{ secrets.GOOGLE_CREDS }}' > google-creds.json
+
+      - name: Create SQL Proxy Service Account File
+        if: ${{ inputs.use_cloud_sql }}
+        run: echo '${{ secrets.SQL_PROXY_SA }}' > sql-proxy-creds.json
+
+      # --- Optional: Redis ---
+      - name: Start Local Redis Instance
+        if: ${{ inputs.use_redis }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server redis-tools
+          sudo systemctl stop redis-server || true
+          cat > redis.conf << EOF
+          port 6379
+          daemonize yes
+          requirepass dummy_password_for_local_redis
+          bind 127.0.0.1
+          save ""
+          appendonly no
+          EOF
+          redis-server redis.conf
+          sleep 5
+          redis-cli -h 127.0.0.1 -p 6379 -a "dummy_password_for_local_redis" ping
+
+      - name: Ping Local Redis
+        if: ${{ inputs.use_redis }}
+        run: redis-cli -h 127.0.0.1 -p 6379 -a "dummy_password_for_local_redis" PING
+
+      # --- Go private module access ---
+      - name: Set up Go environment for private repo access
+        run: |
+          git config --global url."https://$GH_ACCESS_TOKEN@github.com/".insteadOf "https://github.com/"
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+
+      - name: Download Go Modules
+        run: go mod download
+        env:
+          GOPRIVATE: github.com/wanaware
+
+      - name: Run Go Mod Tidy
+        run: go mod tidy
+        env:
+          GOPRIVATE: github.com/wanaware
+
+      # --- Optional: Cloud SQL Proxy ---
+      - name: Download Cloud SQL Proxy
+        if: ${{ inputs.use_cloud_sql }}
+        run: |
+          curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.7.0/cloud-sql-proxy.linux.amd64
+          chmod +x cloud-sql-proxy
+
+      - name: Enable cloud SQL proxy to temp instance
+        if: ${{ inputs.use_cloud_sql }}
+        run: |
+          nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:${{ env.DB_NAME }} \
+            --port ${{ env.DB_PORT }} \
+            --credentials-file sql-proxy-creds.json \
+            > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
+          echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV
+          sleep 10
+
+      - name: Wait for DB server to be reachable
+        if: ${{ inputs.use_cloud_sql }}
+        run: |
+          wait_time=5
+          max_attempts=3
+          for i in $(seq 1 $max_attempts); do
+            if nc -zv localhost ${{ env.DB_PORT }}; then
+              echo "DB server is reachable!"
+              exit 0
+            fi
+            echo "Attempt $i failed. Waiting ${wait_time}s..."
+            sleep $wait_time
+            wait_time=$((wait_time * 2))
+          done
+          echo "DB server did not become reachable in time"
+          exit 1
+
+      - name: Install pg client
+        if: ${{ inputs.use_cloud_sql }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client netcat-openbsd
+
+      - name: Connect to cloud-sql-proxy using PG client
+        if: ${{ inputs.use_cloud_sql }}
+        run: |
+          PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql \
+            -h 127.0.0.1 \
+            -p ${{ env.DB_PORT }} \
+            -U "${{ env.DB_USER }}" \
+            -d "${{ env.DB_NAME }}" \
+            -c 'SELECT NOW()'
+
+      # --- Start Go server ---
+      - name: Start Go server
+        run: |
+          chmod +x ${{ inputs.wait_for_it_path }}
+          # Write extra server env vars to a temp file and source it
+          if [ -n "$SERVER_ENV" ]; then
+            echo "$SERVER_ENV" > /tmp/server_extra.env
+            set -a && source /tmp/server_extra.env && set +a
+          fi
+          nohup go run ${{ inputs.server_cmd }} >> server.log 2>&1 & echo $! > server_pid.txt
+          API_PID=$(cat server_pid.txt)
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
+          echo "Server started with PID: $API_PID"
+        env:
+          SERVER_ENV: ${{ inputs.server_env }}
+          GOPRIVATE: github.com/wanaware
+          # Database
+          DB_HOST: "127.0.0.1"
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ env.DB_NAME }}
+          DB_PORT: ${{ env.DB_PORT }}
+          # Auth0
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
+          AUTH0_CLIENT_SECRET: ${{ secrets.AUTH0_CLIENT_SECRET }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+          # Neo4j (optional - used by function-integrator)
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          # GCP
+          PROJECT_ID: ${{ secrets.GCP_PROJECT }}
+          GOOGLE_APPLICATION_CREDENTIALS: google-creds.json
+          # Service endpoints (function-integrator)
+          SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT: ${{ secrets.SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT }}
+          USER_AUTH_SERVICE_GRAPHQL_ENDPOINT: ${{ secrets.USER_AUTH_SERVICE_GRAPHQL_ENDPOINT }}
+          SMARTY_AUTH_ID: ${{ secrets.SMARTY_AUTH_ID }}
+          SMARTY_AUTH_TOKEN: ${{ secrets.SMARTY_AUTH_TOKEN }}
+          # Common secrets
+          AUTHENTICATION_KEY: ${{ secrets.AUTHENTICATION_KEY }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          NEW_RELIC_APP_NAME: ${{ secrets.NEW_RELIC_APP_NAME }}
+
+      - name: Wait for API server to be reachable
+        run: |
+          wait_time=5
+          max_attempts=6
+          for i in $(seq 1 $max_attempts); do
+            if curl --silent --head http://localhost:8080/ || curl --silent --head http://localhost:8080/graphql; then
+              echo "API server is reachable!"
+              exit 0
+            fi
+            echo "Attempt $i failed. Waiting ${wait_time}s..."
+            sleep $wait_time
+            wait_time=$((wait_time * 2))
+          done
+          echo "API server did not become reachable in time"
+          cat server.log
+          exit 1
+
+      # --- Newman tests ---
+      - name: Install Newman
+        run: npm install -g newman
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
+      - name: Install pip and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # --- Optional: Neo4j/DB cleanup before tests ---
+      - name: Clean up Neo4j test data before tests
+        if: ${{ inputs.cleanup_script != '' }}
+        run: |
+          chmod +x ${{ inputs.cleanup_script }}
+          ${{ inputs.cleanup_script }}
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          DB_HOST: "127.0.0.1"
+          DB_PORT: ${{ env.DB_PORT }}
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ env.DB_NAME }}
+
+      # --- Option 1: Use pre_test_setup_script (like create_and_capture_ids.py) ---
+      - name: Run Python Script to Get Access Token and Function IDs
+        if: ${{ inputs.pre_test_setup_script != '' }}
+        run: |
+          result=$(python ${{ inputs.pre_test_setup_script }})
+          SCRIPT_EXIT_CODE=$?
+          echo "$result"
+          if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
+            echo "ERROR: Pre-test setup script failed with exit code $SCRIPT_EXIT_CODE"
+            exit 1
+          fi
+
+          ACCESS_TOKEN=$(echo "$result" | grep "Access Token" | sed 's/Access Token: //')
+          FUNCTION_IDS=$(echo "$result" | grep "Function IDs" | sed 's/Function IDs: //')
+          CUSTOMER_ID=$(echo "$result" | grep "Customer ID" | sed 's/Customer ID: //')
+
+          if [[ -z "$ACCESS_TOKEN" ]]; then
+            echo "ERROR: ACCESS_TOKEN is missing!"
+            exit 1
+          fi
+
+          echo "ACCESS_TOKEN=${ACCESS_TOKEN}" >> $GITHUB_ENV
+          echo "CUSTOMER_ID=${CUSTOMER_ID}" >> $GITHUB_ENV
+          if [[ -n "$FUNCTION_IDS" ]] && [[ "$FUNCTION_IDS" != "[]" ]]; then
+            echo "FUNCTION_IDS=${FUNCTION_IDS}" >> $GITHUB_ENV
+          fi
+
+      # --- Option 2: Use simple access_token_script ---
+      - name: Fetch access token and build Newman env
+        if: ${{ inputs.pre_test_setup_script == '' }}
+        run: |
+          OUTPUT=$(python3 ${{ inputs.access_token_script }})
+          ACCESS_TOKEN=$(echo "$OUTPUT" | grep "Access Token:" | awk -F': ' '{print $2}')
+          CUSTOMER_ID=$(echo "$OUTPUT" | grep "Customer ID:" | awk -F': ' '{print $2}')
+
+          if [ -z "$ACCESS_TOKEN" ] || [ -z "$CUSTOMER_ID" ]; then
+            echo "Failed to fetch ACCESS_TOKEN or CUSTOMER_ID"
+            exit 1
+          fi
+
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+          echo "CUSTOMER_ID=$CUSTOMER_ID" >> $GITHUB_ENV
+
+      - name: Build Newman environment JSON
+        run: |
+          # Build base Newman env JSON
+          BASE_ENV=$(jq -n \
+            --arg baseUrl "http://localhost:8080" \
+            --arg accessToken "$ACCESS_TOKEN" \
+            --arg customerId "$CUSTOMER_ID" \
+            '{
+              "id": "integration-test-env",
+              "name": "Integration Test Environment",
+              "values": [
+                {"key": "baseUrl", "value": $baseUrl, "enabled": true},
+                {"key": "ACCESS_TOKEN", "value": $accessToken, "enabled": true},
+                {"key": "CUSTOMER_ID", "value": $customerId, "enabled": true}
+              ]
+            }')
+
+          # Merge with any extra env vars passed via input
+          if [ -n "$NEWMAN_ENV_JSON" ]; then
+            echo "$BASE_ENV" | jq --argjson extra "$NEWMAN_ENV_JSON" \
+              '.values += $extra' > newman_env.json
+          else
+            echo "$BASE_ENV" > newman_env.json
+          fi
+        env:
+          NEWMAN_ENV_JSON: ${{ inputs.newman_env_json }}
+
+      # --- Optional: Delete data tags before tests ---
+      - name: Delete previously created data tags
+        if: ${{ inputs.delete_data_tags_script != '' }}
+        run: python ${{ inputs.delete_data_tags_script }} "$ACCESS_TOKEN"
+
+      # --- Option 1: Custom test runner script ---
+      - name: Run Integration Tests (custom runner)
+        if: ${{ inputs.test_runner_script != '' }}
+        id: custom_runner
+        continue-on-error: true
+        run: |
+          ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
+          chmod +x ${{ inputs.test_runner_script }}
+          ${{ inputs.test_runner_script }} "$ACCESS_TOKEN" "$FUNCTION_IDS" "$CUSTOMER_ID"
+
+      # --- Option 2: Direct Newman run ---
+      - name: Run Integration Tests (newman)
+        if: ${{ inputs.test_runner_script == '' }}
+        run: |
+          ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
+          echo "NEWMAN_FAILED=false" >> $GITHUB_ENV
+
+          if ! newman run ${{ inputs.postman_collection }} \
+            -e newman_env.json \
+            ${{ inputs.newman_extra_args }} \
+            --reporters cli,json \
+            --reporter-json-export newman-results.json; then
+            echo "NEWMAN_FAILED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Comment Integration Test Results on PR
+        if: ${{ always() && inputs.test_runner_script == '' }}
+        run: |
+          echo '### Integration Test Results' > comment_integration_tests.md
+          if [ "$NEWMAN_FAILED" == "true" ]; then
+            echo '**❌ Integration tests failed**' >> comment_integration_tests.md
+            echo '' >> comment_integration_tests.md
+            echo "Collection: \`${{ inputs.postman_collection }}\`" >> comment_integration_tests.md
+          else
+            echo '**✅ All integration tests passed successfully!**' >> comment_integration_tests.md
+            echo '' >> comment_integration_tests.md
+            echo "Collection: \`${{ inputs.postman_collection }}\`" >> comment_integration_tests.md
+          fi
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_integration_tests.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Optional: Post-test cleanup (e.g. delete_nodes.py) ---
+      - name: Delete previously created node ids
+        if: ${{ always() && inputs.post_test_cleanup_script != '' }}
+        run: |
+          if [[ -n "$FUNCTION_IDS" ]]; then
+            FUNCTION_IDS_STRING=$(echo "$FUNCTION_IDS" | jq -r '. | join(",")')
+            python ${{ inputs.post_test_cleanup_script }} "$ACCESS_TOKEN" "${{ inputs.post_test_cleanup_args }}" "$FUNCTION_IDS_STRING"
+          fi
+
+      - name: Close App Server & cloud sql proxy
+        if: always()
+        run: |
+          [ -n "$API_PID" ] && kill $API_PID || true
+          [ -n "$CLOUD_SQL_PROXY_PID" ] && kill $CLOUD_SQL_PROXY_PID || true
+
+      - name: Check for Failed Integration Tests
+        run: |
+          # Check for direct newman failure
+          if [ "$NEWMAN_FAILED" == "true" ]; then
+            echo "Integration tests failed."
+            exit 1
+          fi
+          # Check for custom runner failure (step outcome)
+          if [ "${{ steps.custom_runner.outcome }}" == "failure" ]; then
+            echo "Integration tests failed (custom runner)."
+            exit 1
+          fi
+          echo "All integration tests passed."

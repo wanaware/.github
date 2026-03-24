@@ -14,10 +14,11 @@ on:
         type: string
       image_path:
         description: 'Image path within the registry (e.g. fleet-manager/fleet-manager)'
-        required: true
+        required: false
+        default: ''
         type: string
       deploy_type:
-        description: 'Deployment target: gke | cloudrun-service | cloudrun-job'
+        description: 'Deployment target: gke | cloudrun-service | cloudrun-job | release-only'
         required: false
         default: 'gke'
         type: string
@@ -43,6 +44,11 @@ on:
         type: string
       generate_docs:
         description: 'Run graphdoc generation and upload to GCS'
+        required: false
+        default: false
+        type: boolean
+      upload_release_files:
+        description: 'Upload release files (output-folder) to GCS without graphdoc (for release-only deployments)'
         required: false
         default: false
         type: boolean
@@ -112,19 +118,22 @@ jobs:
           credentials_json: '${{ env.GCP_SA_KEY }}'
 
       - name: Configure Docker to use the gcloud command-line tool as a credential helper
+        if: ${{ inputs.deploy_type != 'release-only' }}
         run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
 
       - name: Download .env artifact
+        if: ${{ inputs.deploy_type != 'release-only' }}
         uses: actions/download-artifact@v4
         with:
           name: env-file
           path: ${{ inputs.docker_context }}
 
       - name: Write google-creds.json
-        if: ${{ inputs.google_creds }}
+        if: ${{ inputs.google_creds && inputs.deploy_type != 'release-only' }}
         run: echo '${{ secrets.GOOGLE_CREDS }}' > ${{ inputs.docker_context }}/google-creds.json
 
       - name: Build and push Docker image
+        if: ${{ inputs.deploy_type != 'release-only' }}
         id: build
         uses: docker/build-push-action@v4
         with:
@@ -280,3 +289,11 @@ jobs:
         run: |
           gcloud auth activate-service-account --key-file="${{ github.workspace }}/service-account.json"
           gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
+
+      - name: Upload release files to GCS
+        if: ${{ inputs.upload_release_files && !inputs.generate_docs }}
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: "${{ github.workspace }}/service-account.json"
+        run: |
+          gcloud auth activate-service-account --key-file="${{ github.workspace }}/service-account.json"
+          gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}/

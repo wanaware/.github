@@ -344,7 +344,7 @@ jobs:
 
       # --- Option 2: Use simple access_token_script ---
       - name: Fetch access token and build Newman env
-        if: ${{ inputs.pre_test_setup_script == '' && inputs.access_token_script != '' }}
+        if: ${{ inputs.pre_test_setup_script == '' }}
         run: |
           OUTPUT=$(python3 ${{ inputs.access_token_script }})
           ACCESS_TOKEN=$(echo "$OUTPUT" | grep "Access Token:" | awk -F': ' '{print $2}')
@@ -359,7 +359,7 @@ jobs:
           echo "CUSTOMER_ID=$CUSTOMER_ID" >> $GITHUB_ENV
 
       - name: Build Newman environment JSON
-        if: ${{ inputs.test_runner_script == '' }}
+        # if: ${{ inputs.test_runner_script == '' }}
         run: |
           # Build base Newman env JSON
           BASE_ENV=$(jq -n \

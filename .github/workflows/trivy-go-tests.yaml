@@ -11,7 +11,7 @@ on:
     secrets:
       GH_ACCESS_TOKEN:
         description: 'GitHub access token for private repo access (required only if run_go_tests is true)'
-        required: true
+        required: false
   pull_request:
     branches:
       - dev

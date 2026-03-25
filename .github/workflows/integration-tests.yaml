@@ -47,6 +47,11 @@ on:
         required: false
         default: './scripts/get_access_token.py'
         type: string
+      skip_access_token:
+        description: 'Skip the access token fetching step entirely'
+        required: false
+        default: false
+        type: boolean
       newman_env_json:
         description: 'JSON string for Newman environment variables (injected into newman_env.json)'
         required: false
@@ -344,7 +349,7 @@ jobs:
 
       # --- Option 2: Use simple access_token_script ---
       - name: Fetch access token and build Newman env
-        if: ${{ inputs.pre_test_setup_script == '' }}
+        if: ${{ !inputs.skip_access_token && inputs.pre_test_setup_script == '' }}
         run: |
           OUTPUT=$(python3 ${{ inputs.access_token_script }})
           ACCESS_TOKEN=$(echo "$OUTPUT" | grep "Access Token:" | awk -F': ' '{print $2}')

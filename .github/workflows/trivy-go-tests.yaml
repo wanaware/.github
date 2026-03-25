@@ -8,6 +8,16 @@ on:
         required: false
         default: false
         type: boolean
+      working_directory:
+        description: 'Working directory for Go commands (default: root)'
+        required: false
+        default: '.'
+        type: string
+      test_path:
+        description: 'Path to test directory relative to working_directory (default: ./tests/...)'
+        required: false
+        default: './tests/...'
+        type: string
     secrets:
       GH_ACCESS_TOKEN:
         description: 'GitHub access token for private repo access (required only if run_go_tests is true)'
@@ -42,10 +52,12 @@ jobs:
 
       - name: Download Go Modules
         if: ${{ inputs.run_go_tests }}
+        working-directory: ${{ inputs.working_directory }}
         run: go mod download
 
       - name: Run Go Mod Tidy
         if: ${{ inputs.run_go_tests }}
+        working-directory: ${{ inputs.working_directory }}
         run: go mod tidy
 
       - name: Run Trivy vulnerability scanner
@@ -77,19 +89,20 @@ jobs:
 
       - name: Run Go Unit Tests and Comment Results
         if: ${{ inputs.run_go_tests }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           echo '### Go Unit Test Results' > comment_go_tests.md
           echo '| Test Name | Status |' >> comment_go_tests.md
           echo '| --------- | ------ |' >> comment_go_tests.md
 
           # Run Go tests and check for failures in real-time
-          go test -v ./test/... | grep -E '^(--- PASS|--- FAIL)' | sed -E 's/^(--- PASS: )(.*)/\|\2\|Pass\|/; s/^(--- FAIL: )(.*)/\|\2\|Fail\|/' >> comment_go_tests.md
+          go test -v ${{ inputs.test_path }} | grep -E '^(--- PASS|--- FAIL)' | sed -E 's/^(--- PASS: )(.*)/\|\2\|Pass\|/; s/^(--- FAIL: )(.*)/\|\2\|Fail\|/' >> comment_go_tests.md
           
           # Post test results to PR
           gh pr comment ${{ github.event.pull_request.number }} --body-file comment_go_tests.md
 
           # Check for failed tests and exit if any test fails
-          if go test -v ./test/... | grep -q '^--- FAIL'; then
+          if go test -v ${{ inputs.test_path }} | grep -q '^--- FAIL'; then
             echo "There are failed tests. Failing the job."
             exit 1
           fi

@@ -228,7 +228,12 @@ jobs:
             -d "${{ env.DB_NAME }}" \
             -c 'SELECT NOW()'
 
-      # --- Start Go server ---
+      # --- Build and start Go server ---
+      - name: Build Go server
+        run: go build -o /tmp/server-binary ${{ inputs.server_cmd }}
+        env:
+          GOPRIVATE: github.com/wanaware
+
       - name: Start Go server
         run: |
           chmod +x ${{ inputs.wait_for_it_path }}
@@ -237,7 +242,6 @@ jobs:
             echo "$SERVER_ENV" > /tmp/server_extra.env
             set -a && source /tmp/server_extra.env && set +a
           fi
-          go build -o /tmp/server-binary ${{ inputs.server_cmd }}
           nohup /tmp/server-binary >> server.log 2>&1 & echo $! > server_pid.txt
           API_PID=$(cat server_pid.txt)
           echo "API_PID=$API_PID" >> $GITHUB_ENV

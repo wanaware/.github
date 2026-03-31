@@ -237,7 +237,8 @@ jobs:
             echo "$SERVER_ENV" > /tmp/server_extra.env
             set -a && source /tmp/server_extra.env && set +a
           fi
-          nohup go run ${{ inputs.server_cmd }} >> server.log 2>&1 & echo $! > server_pid.txt
+          go build -o /tmp/server-binary ${{ inputs.server_cmd }}
+          nohup /tmp/server-binary >> server.log 2>&1 & echo $! > server_pid.txt
           API_PID=$(cat server_pid.txt)
           echo "API_PID=$API_PID" >> $GITHUB_ENV
           echo "Server started with PID: $API_PID"

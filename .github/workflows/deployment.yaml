@@ -191,7 +191,7 @@ jobs:
         if: ${{ inputs.generate_docs }}
         run: go run ${{ inputs.docs_script }}
         env:
-          GOPRIVATE: github.com/wanaware
+          GOPRIVATE: github.com/wanaware/*
 
       - name: Generate GraphQL docs
         if: ${{ inputs.generate_docs }}

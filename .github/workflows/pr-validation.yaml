@@ -19,9 +19,11 @@ jobs:
 
     steps:
       - name: Validate PR title format
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           # Get the PR title
-          pr_title="${{ github.event.pull_request.title }}"
+          pr_title="$PR_TITLE"
 
           echo "Validating PR title: $pr_title"
 
@@ -114,13 +116,21 @@ jobs:
             missing_sections="${missing_sections}\n- ## Why"
           fi
 
+          if ! echo "$PR_BODY" | grep -qE "^## QA Report[[:space:]]*$"; then
+            missing_sections="${missing_sections}\n- ## QA Report"
+          fi
+
+          if ! echo "$PR_BODY" | grep -qE "^## Integration Tests[[:space:]]*$"; then
+            missing_sections="${missing_sections}\n- ## Integration Tests"
+          fi
+
           if [[ -n "$missing_sections" ]]; then
             echo "❌ PR description is missing required sections:"
             echo -e "$missing_sections"
             echo ""
             echo "Please use the PR template and fill in all required sections."
-            echo "Required: ## Summary, ## Why"
-            echo "Optional: ## Dependencies, ## Test Plan"
+            echo "Required: ## Summary, ## Why, ## QA Report, ## Integration Tests"
+            echo "Optional: ## Dependencies"
             exit 1
           fi
 
@@ -137,6 +147,21 @@ jobs:
           why_content=$(echo "$PR_BODY" | sed -n '/^## Why[[:space:]]*$/,/^## /p' | grep -v '^## ' | sed 's/<!--.*-->//g' | tr -d '[:space:]')
           if [[ ${#why_content} -lt 20 ]]; then
             echo "❌ ## Why section is too short or empty. Please explain why this change is needed (minimum 20 characters)."
+            exit 1
+          fi
+
+          # Validate QA Report has the summary table filled in (at least one number in the table row)
+          qa_section=$(echo "$PR_BODY" | sed -n '/^## QA Report[[:space:]]*$/,/^## /p' | grep -v '^## ')
+          if ! echo "$qa_section" | grep -qE '\|[[:space:]]*[0-9]+[[:space:]]*\|'; then
+            echo "❌ ## QA Report table is not filled in. Please add test pass/fail counts."
+            exit 1
+          fi
+
+          # Validate Integration Tests section has at least one checked item
+          tests_section=$(echo "$PR_BODY" | sed -n '/^## Integration Tests[[:space:]]*$/,/^## /p' | grep -v '^## ')
+          if ! echo "$tests_section" | grep -qE '\- \[x\]'; then
+            echo "❌ ## Integration Tests section has no checked items."
+            echo "Either check 'No integration tests required' with a reason, or list the tests added/edited."
             exit 1
           fi
 

@@ -152,7 +152,7 @@ jobs:
 
           # Validate QA Report has an uploaded image (GitHub converts uploads to ![...](https://...) markdown)
           qa_section=$(echo "$PR_BODY" | sed -n '/^## QA Report[[:space:]]*$/,/^## /p' | grep -v '^## ')
-          if ! echo "$qa_section" | grep -qE '!\[.*\]\(https://'; then
+          if ! echo "$qa_section" | grep -qE '!\[.*\]\(https://|<img[[:space:]].*src="https://'; then
             echo "❌ ## QA Report section has no screenshot uploaded."
             echo "Please upload a full-page screenshot of the QA HTML report."
             echo "How to capture:"

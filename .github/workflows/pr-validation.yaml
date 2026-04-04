@@ -150,10 +150,15 @@ jobs:
             exit 1
           fi
 
-          # Validate QA Report has the summary table filled in (at least one number in the table row)
+          # Validate QA Report has an uploaded image (GitHub converts uploads to ![...](https://...) markdown)
           qa_section=$(echo "$PR_BODY" | sed -n '/^## QA Report[[:space:]]*$/,/^## /p' | grep -v '^## ')
-          if ! echo "$qa_section" | grep -qE '\|[[:space:]]*[0-9]+[[:space:]]*\|'; then
-            echo "❌ ## QA Report table is not filled in. Please add test pass/fail counts."
+          if ! echo "$qa_section" | grep -qE '!\[.*\]\(https://'; then
+            echo "❌ ## QA Report section has no screenshot uploaded."
+            echo "Please upload a full-page screenshot of the QA HTML report."
+            echo "How to capture:"
+            echo "  Chrome: Cmd+Option+I → Cmd+Shift+P → 'Capture full size screenshot'"
+            echo "  Safari: Develop → Show Web Inspector (Cmd+Option+I) → Elements → right-click <body> → 'Capture Screenshot'"
+            echo "Then drag the image into the PR description under ## QA Report."
             exit 1
           fi
 

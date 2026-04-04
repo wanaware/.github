@@ -12,19 +12,13 @@
 None
 
 ## QA Report
-<!-- Required: Paste the QA report summary below (pass/fail counts, key findings, any bugs). -->
-<!-- Generate the full HTML report locally — do not commit it to the repo. -->
+<!-- Required: Upload a full-page screenshot of the QA HTML report below. -->
+<!-- How to capture full-page screenshot: -->
+<!-- Chrome: Cmd+Option+I (open DevTools) → Cmd+Shift+P (command palette) → type "Capture full size screenshot" → saves as PNG -->
+<!-- Safari: Develop menu → Show Web Inspector (or Cmd+Option+I) → Elements tab → right-click <body> → "Capture Screenshot" -->
+<!-- Note: If Safari's Develop menu is not visible, enable it in Safari → Settings → Advanced → check "Show features for web developers" -->
+<!-- Drag and drop the screenshot image here -->
 
-| Total | Passed | Failed | Bugs |
-|-------|--------|--------|------|
-|       |        |        |      |
-
-<details>
-<summary>Details</summary>
-
-<!-- Paste key findings, failures, or bug summaries here -->
-
-</details>
 
 ## Integration Tests
 <!-- Required: List integration tests added or edited in this PR. -->

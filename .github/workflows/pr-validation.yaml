@@ -162,11 +162,14 @@ jobs:
             exit 1
           fi
 
-          # Validate Integration Tests section has at least one checked item
+          # Validate Integration Tests: either "No integration tests required" is checked, or tests are listed
           tests_section=$(echo "$PR_BODY" | sed -n '/^## Integration Tests[[:space:]]*$/,/^## /p' | grep -v '^## ')
-          if ! echo "$tests_section" | grep -qE '\- \[x\]'; then
-            echo "❌ ## Integration Tests section has no checked items."
-            echo "Either check 'No integration tests required' with a reason, or list the tests added/edited."
+          has_no_tests_checked=$(echo "$tests_section" | grep -cE '\- \[x\] No integration tests required' || true)
+          has_tests_listed=$(echo "$tests_section" | grep -cE '^- `.+`' || true)
+          if [[ "$has_no_tests_checked" -eq 0 && "$has_tests_listed" -eq 0 ]]; then
+            echo "❌ ## Integration Tests section is incomplete."
+            echo "Either check 'No integration tests required' or list tests under Added/Edited."
+            echo "Format: - \`test name\` — description"
             exit 1
           fi
 

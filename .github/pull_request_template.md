@@ -23,7 +23,10 @@ None
 ## Integration Tests
 <!-- Required: List integration tests added or edited in this PR. -->
 
-- [ ] No integration tests required — Reason:
+- [ ] No integration tests required
 
-### Added / Edited
-<!-- - [ ] `test name` — what it covers -->
+### Added
+<!-- - `test name` — what it covers -->
+
+### Edited
+<!-- - `test name` — what changed -->

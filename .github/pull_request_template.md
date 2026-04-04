@@ -5,12 +5,6 @@
 ## Why
 <!-- Required: Explain why this change is needed. What problem does it solve? (minimum 20 characters) -->
 
-
-## Dependencies
-<!-- Optional: Does this change depend on another repo or PR? If yes, list them below. -->
-
-None
-
 ## QA Report
 <!-- Required: Upload a full-page screenshot of the QA HTML report below. -->
 <!-- How to capture full-page screenshot: -->
@@ -30,3 +24,6 @@ None
 
 ### Edited
 <!-- - `test name` — what changed -->
+
+## Dependencies
+<!-- Optional: Does this change depend on another repo or PR? If yes, list them below. -->

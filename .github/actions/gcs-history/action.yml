@@ -1,0 +1,45 @@
+name: 'GCS Release History'
+description: 'Generate and upload release history HTML dashboard to Google Cloud Storage'
+
+inputs:
+  bucket_name:
+    description: 'GCS bucket name'
+    required: true
+  env:
+    description: 'Environment short name (dev, stage, prod)'
+    required: true
+  tag:
+    description: 'Release tag'
+    required: true
+  title:
+    description: 'Release title'
+    required: true
+  env_name:
+    description: 'Environment full name (development, staging, production)'
+    required: true
+  date:
+    description: 'Release date'
+    required: true
+  release_notes:
+    description: 'Release notes markdown'
+    required: true
+  service_name:
+    description: 'Service name for GCS path and HTML branding'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run GCS history script
+      shell: bash
+      run: |
+        chmod +x ${{ github.action_path }}/gcs-history.sh
+        ${{ github.action_path }}/gcs-history.sh \
+          "${{ inputs.bucket_name }}" \
+          "${{ inputs.env }}" \
+          "${{ inputs.tag }}" \
+          "${{ inputs.title }}" \
+          "${{ inputs.env_name }}" \
+          "${{ inputs.date }}" \
+          "${{ inputs.release_notes }}" \
+          "${{ inputs.service_name }}"

@@ -202,7 +202,8 @@ jobs:
         id: deploy_status
         run: echo "success=true" >> $GITHUB_OUTPUT
 
-      - name: Create release and update GCS history
+      - name: Create release
+        id: create_release
         if: steps.deploy_status.outputs.success == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -272,15 +273,28 @@ jobs:
 
           echo "$PR_DETAILS" > pr-details.json
 
-          chmod +x ./.github/scripts/gcs-history.sh
-          ./.github/scripts/gcs-history.sh \
-            "${{ secrets.BUCKET_NAME }}" \
-            "$ENV" \
-            "$TAG" \
-            "$TITLE" \
-            "$ENV_NAME" \
-            "$DATE" \
-            "$RELEASE_NOTES"
+          # Export variables for the next step
+          echo "DEPLOY_ENV=$ENV" >> $GITHUB_ENV
+          echo "DEPLOY_TAG=$TAG" >> $GITHUB_ENV
+          echo "DEPLOY_TITLE=$TITLE" >> $GITHUB_ENV
+          echo "DEPLOY_ENV_NAME=$ENV_NAME" >> $GITHUB_ENV
+          echo "DEPLOY_DATE=$DATE" >> $GITHUB_ENV
+          echo "DEPLOY_RELEASE_NOTES<<EOFNOTES" >> $GITHUB_ENV
+          echo "$RELEASE_NOTES" >> $GITHUB_ENV
+          echo "EOFNOTES" >> $GITHUB_ENV
+
+      - name: Update GCS release history
+        if: steps.deploy_status.outputs.success == 'true'
+        uses: WanAware/.github/.github/actions/gcs-history@main
+        with:
+          bucket_name: ${{ secrets.BUCKET_NAME }}
+          env: ${{ env.DEPLOY_ENV }}
+          tag: ${{ env.DEPLOY_TAG }}
+          title: ${{ env.DEPLOY_TITLE }}
+          env_name: ${{ env.DEPLOY_ENV_NAME }}
+          date: ${{ env.DEPLOY_DATE }}
+          release_notes: ${{ env.DEPLOY_RELEASE_NOTES }}
+          service_name: ${{ inputs.service_name }}
 
       - name: Upload docs to GCS
         if: ${{ inputs.generate_docs }}

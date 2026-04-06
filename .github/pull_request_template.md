@@ -7,6 +7,9 @@
 
 ## QA Report
 <!-- Required: Upload a full-page screenshot of the QA HTML report below. -->
+
+- [ ] No QA report required
+
 <!-- How to capture full-page screenshot: -->
 <!-- Chrome: Cmd+Option+I (open DevTools) → Cmd+Shift+P (command palette) → type "Capture full size screenshot" → saves as PNG -->
 <!-- Safari: Develop menu → Show Web Inspector (or Cmd+Option+I) → Elements tab → right-click <body> → "Capture Screenshot" -->

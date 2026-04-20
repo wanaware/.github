@@ -88,7 +88,7 @@ on:
         default: ''
         type: string
       working_directory:
-        description: 'Directory containing go.mod (for monorepos). Defaults to repo root.'
+        description: 'Directory containing go.mod (for monorepos). Defaults to repo root. When set, relative paths such as server_cmd are resolved from this directory.'
         required: false
         default: '.'
         type: string

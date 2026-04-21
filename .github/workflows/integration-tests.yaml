@@ -87,6 +87,11 @@ on:
         required: false
         default: ''
         type: string
+      working_directory:
+        description: 'Directory containing go.mod (for monorepos). Defaults to repo root. When set, relative paths such as server_cmd are resolved from this directory.'
+        required: false
+        default: '.'
+        type: string
 
 jobs:
   integration-test:
@@ -170,11 +175,13 @@ jobs:
 
       - name: Download Go Modules
         run: go mod download
+        working-directory: ${{ inputs.working_directory }}
         env:
           GOPRIVATE: github.com/wanaware
 
       - name: Run Go Mod Tidy
         run: go mod tidy
+        working-directory: ${{ inputs.working_directory }}
         env:
           GOPRIVATE: github.com/wanaware
 
@@ -231,6 +238,7 @@ jobs:
       # --- Build and start Go server ---
       - name: Build Go server
         run: go build -o /tmp/server-binary ${{ inputs.server_cmd }}
+        working-directory: ${{ inputs.working_directory }}
         env:
           GOPRIVATE: github.com/wanaware
 

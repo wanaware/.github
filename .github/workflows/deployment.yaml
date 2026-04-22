@@ -42,6 +42,11 @@ on:
         required: false
         default: '.'
         type: string
+      dockerfile_path:
+        description: 'Path to the Dockerfile'
+        required: false
+        default: 'Dockerfile'
+        type: string
       generate_docs:
         description: 'Run graphdoc generation and upload to GCS'
         required: false
@@ -138,6 +143,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: ${{ inputs.docker_context }}
+          file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: true
           tags: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |

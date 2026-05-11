@@ -77,11 +77,10 @@ on:
         required: false
         default: 'projects/866233621206/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
         type: string
-      gcp_service_account:
-        description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
-        required: true
-        type: string
     secrets:
+      GCP_SERVICE_ACCOUNT:
+        required: true
+        description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
       GCP_PROJECT:
         required: false
       GCP_REGISTRY:
@@ -117,7 +116,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ inputs.workload_identity_provider }}
-          service_account: ${{ inputs.gcp_service_account }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2

@@ -72,15 +72,13 @@ on:
         required: false
         default: ''
         type: string
-      workload_identity_provider:
-        description: 'Full WIF provider resource name. Defaults to the wanaware GCP project pool.'
-        required: false
-        default: 'projects/866233621206/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
-        type: string
     secrets:
       GCP_SERVICE_ACCOUNT:
         required: true
         description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
+      GCP_WORKLOAD_IDENTITY_PROVIDER:
+        required: true
+        description: 'Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider).'
       GCP_PROJECT:
         required: false
       GCP_REGISTRY:
@@ -115,7 +113,7 @@ jobs:
       - name: Authenticate with GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud

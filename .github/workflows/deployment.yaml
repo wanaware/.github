@@ -72,6 +72,16 @@ on:
         required: false
         default: ''
         type: string
+      workload_identity_provider:
+        description: 'Full WIF provider resource name. Defaults to the wanaware GCP project pool.'
+        required: false
+        default: 'projects/866233621206/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
+        type: string
+      gcp_service_account:
+        description: 'GCP service account email to impersonate via WIF. Defaults to tf-deploy.'
+        required: false
+        default: ''
+        type: string
     secrets:
       GCP_PROJECT:
         required: false
@@ -93,6 +103,9 @@ jobs:
 
     environment: ${{ inputs.environment_name }}
 
+    # id-token: write is required for WIF — callers must also set this permission
+    # in their own workflow, otherwise GitHub will not issue an OIDC token and
+    # the Authenticate with GCP step will fail.
     permissions:
       contents: write
       id-token: write
@@ -104,8 +117,8 @@ jobs:
       - name: Authenticate with GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: 'projects/866233621206/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
-          service_account: 'tf-deploy@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com'
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.gcp_service_account != '' && inputs.gcp_service_account || format('tf-deploy@{0}.iam.gserviceaccount.com', secrets.GCP_PROJECT) }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2

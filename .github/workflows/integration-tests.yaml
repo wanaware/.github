@@ -98,6 +98,9 @@ jobs:
     name: Run Integration Tests
     runs-on: ubuntu-latest
     environment: development
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Check out repository

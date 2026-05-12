@@ -125,23 +125,16 @@ jobs:
         with:
           go-version: ${{ inputs.go_version }}
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@1bee7de035d65ec5da40a31f8589e240eba8fde5
-        with:
-          service_account_key: ${{ secrets.GOOGLE_CREDS }}
-          project_id: ${{ secrets.GCP_PROJECT }}
-
       - name: Authenticate with GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: '${{ secrets.GOOGLE_CREDS }}'
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Create Service Account File
-        run: echo '${{ secrets.GOOGLE_CREDS }}' > google-creds.json
-
-      - name: Create SQL Proxy Service Account File
-        if: ${{ inputs.use_cloud_sql }}
-        run: echo '${{ secrets.SQL_PROXY_SA }}' > sql-proxy-creds.json
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
 
       # --- Optional: Redis ---
       - name: Start Local Redis Instance
@@ -197,7 +190,6 @@ jobs:
         run: |
           nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:${{ env.DB_NAME }} \
             --port ${{ env.DB_PORT }} \
-            --credentials-file sql-proxy-creds.json \
             > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
           echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV
           sleep 10
@@ -274,7 +266,6 @@ jobs:
           NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
           # GCP
           PROJECT_ID: ${{ secrets.GCP_PROJECT }}
-          GOOGLE_APPLICATION_CREDENTIALS: google-creds.json
           # Service endpoints (function-integrator)
           SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT: ${{ secrets.SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT }}
           USER_AUTH_SERVICE_GRAPHQL_ENDPOINT: ${{ secrets.USER_AUTH_SERVICE_GRAPHQL_ENDPOINT }}

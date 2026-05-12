@@ -182,6 +182,10 @@ jobs:
           GOPRIVATE: github.com/wanaware
 
       # --- Optional: Cloud SQL Proxy ---
+      - name: Create SQL Proxy Service Account File
+        if: ${{ inputs.use_cloud_sql }}
+        run: echo '${{ secrets.SQL_PROXY_SA }}' > sql-proxy-creds.json
+
       - name: Download Cloud SQL Proxy
         if: ${{ inputs.use_cloud_sql }}
         run: |
@@ -193,12 +197,10 @@ jobs:
         run: |
           nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:wanaware-database \
             --port ${{ env.DB_PORT }} \
+            --credentials-file sql-proxy-creds.json \
             > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
           echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV
           sleep 10
-          echo "=== Cloud SQL Proxy stdout ===" && cat cloud-sql-proxy.out || true
-          echo "=== Cloud SQL Proxy stderr ===" && cat cloud-sql-proxy.err || true
-          echo "=== Listening ports ===" && ss -tlnp | grep ${{ env.DB_PORT }} || true
 
       - name: Wait for DB server to be reachable
         if: ${{ inputs.use_cloud_sql }}
@@ -226,7 +228,6 @@ jobs:
       - name: Connect to cloud-sql-proxy using PG client
         if: ${{ inputs.use_cloud_sql }}
         run: |
-          echo "=== Proxy logs at connect time ===" && cat cloud-sql-proxy.out cloud-sql-proxy.err || true
           PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql \
             -h 127.0.0.1 \
             -p ${{ env.DB_PORT }} \

@@ -191,7 +191,7 @@ jobs:
       - name: Enable cloud SQL proxy to temp instance
         if: ${{ inputs.use_cloud_sql }}
         run: |
-          nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:${{ env.DB_NAME }} \
+          nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:wanaware-database \
             --port ${{ env.DB_PORT }} \
             > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
           echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV

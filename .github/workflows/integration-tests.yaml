@@ -93,6 +93,10 @@ on:
         default: '.'
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   integration-test:
     name: Run Integration Tests

@@ -182,9 +182,13 @@ jobs:
           GOPRIVATE: github.com/wanaware
 
       # --- Optional: Cloud SQL Proxy ---
-      - name: Create SQL Proxy Service Account File
+      - name: Authenticate to GCP as Cloud SQL Proxy SA
         if: ${{ inputs.use_cloud_sql }}
-        run: echo '${{ secrets.SQL_PROXY_SA }}' > sql-proxy-creds.json
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.CI_SQL_PROXY_SA_EMAIL }}
+          create_credentials_file: true
 
       - name: Download Cloud SQL Proxy
         if: ${{ inputs.use_cloud_sql }}
@@ -197,7 +201,6 @@ jobs:
         run: |
           nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:wanaware-database \
             --port ${{ env.DB_PORT }} \
-            --credentials-file sql-proxy-creds.json \
             > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
           echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV
           sleep 10
@@ -236,6 +239,13 @@ jobs:
             -c 'SELECT NOW()' 2>&1
 
       # --- Build and start Go server ---
+      - name: Authenticate to GCP as Application SA
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.CI_APP_RUNTIME_SA_EMAIL }}
+          create_credentials_file: true
+
       - name: Build Go server
         run: go build -o /tmp/server-binary ${{ inputs.server_cmd }}
         working-directory: ${{ inputs.working_directory }}

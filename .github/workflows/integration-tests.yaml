@@ -440,6 +440,7 @@ jobs:
 
       - name: Comment Integration Test Results on PR
         if: ${{ always() && inputs.test_runner_script == '' }}
+        continue-on-error: true
         run: |
           echo '### Integration Test Results' > comment_integration_tests.md
           if [ "$NEWMAN_FAILED" == "true" ]; then
@@ -453,7 +454,7 @@ jobs:
           fi
           gh pr comment ${{ github.event.pull_request.number }} --body-file comment_integration_tests.md
         env:
-          GH_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # --- Optional: Post-test cleanup (e.g. delete_nodes.py) ---
       - name: Delete previously created node ids

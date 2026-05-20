@@ -93,6 +93,10 @@ on:
         default: '.'
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   integration-test:
     name: Run Integration Tests
@@ -101,6 +105,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: write
 
     steps:
       - name: Check out repository
@@ -445,6 +450,7 @@ jobs:
 
       - name: Comment Integration Test Results on PR
         if: ${{ always() && inputs.test_runner_script == '' }}
+        continue-on-error: true
         run: |
           echo '### Integration Test Results' > comment_integration_tests.md
           if [ "$NEWMAN_FAILED" == "true" ]; then

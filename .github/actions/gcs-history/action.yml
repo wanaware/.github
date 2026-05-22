@@ -32,14 +32,23 @@ runs:
   steps:
     - name: Run GCS history script
       shell: bash
+      env:
+        BUCKET_NAME: ${{ inputs.bucket_name }}
+        ENV: ${{ inputs.env }}
+        TAG: ${{ inputs.tag }}
+        TITLE: ${{ inputs.title }}
+        ENV_NAME: ${{ inputs.env_name }}
+        DATE: ${{ inputs.date }}
+        RELEASE_NOTES: ${{ inputs.release_notes }}
+        SERVICE_NAME: ${{ inputs.service_name }}
       run: |
-        chmod +x ${{ github.action_path }}/gcs-history.sh
-        ${{ github.action_path }}/gcs-history.sh \
-          "${{ inputs.bucket_name }}" \
-          "${{ inputs.env }}" \
-          "${{ inputs.tag }}" \
-          "${{ inputs.title }}" \
-          "${{ inputs.env_name }}" \
-          "${{ inputs.date }}" \
-          "${{ inputs.release_notes }}" \
-          "${{ inputs.service_name }}"
+        chmod +x "${{ github.action_path }}/gcs-history.sh"
+        "${{ github.action_path }}/gcs-history.sh" \
+          "$BUCKET_NAME" \
+          "$ENV" \
+          "$TAG" \
+          "$TITLE" \
+          "$ENV_NAME" \
+          "$DATE" \
+          "$RELEASE_NOTES" \
+          "$SERVICE_NAME"

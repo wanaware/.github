@@ -32,6 +32,11 @@ on:
         required: false
         default: true
         type: boolean
+      use_nats:
+        description: 'Start a local NATS server instance'
+        required: false
+        default: false
+        type: boolean
       use_cloud_sql:
         description: 'Start Cloud SQL Proxy and connect to the DB'
         required: false
@@ -162,6 +167,29 @@ jobs:
       - name: Ping Local Redis
         if: ${{ inputs.use_redis }}
         run: redis-cli -h 127.0.0.1 -p 6379 -a "dummy_password_for_local_redis" PING
+
+      # --- Optional: NATS ---
+      - name: Start Local NATS Server
+        if: ${{ inputs.use_nats }}
+        run: |
+          NATS_VERSION="v2.10.18"
+          sudo apt-get install -y unzip
+          curl -sSfL \
+            "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.zip" \
+            -o nats-server.zip
+          unzip -o nats-server.zip
+          chmod +x nats-server-${NATS_VERSION}-linux-amd64/nats-server
+          sudo mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
+          nohup nats-server --port 4222 --http_port 8222 > nats-server.log 2>&1 &
+          echo "NATS_SERVER_PID=$!" >> $GITHUB_ENV
+          sleep 2
+          echo "NATS_URL=nats://127.0.0.1:4222" >> $GITHUB_ENV
+
+      - name: Ping Local NATS
+        if: ${{ inputs.use_nats }}
+        run: |
+          curl --fail --silent --retry 5 --retry-delay 1 \
+            http://127.0.0.1:8222/healthz
 
       # --- Go private module access ---
       - name: Set up Go environment for private repo access
@@ -475,6 +503,7 @@ jobs:
         run: |
           [ -n "$API_PID" ] && kill $API_PID || true
           [ -n "$CLOUD_SQL_PROXY_PID" ] && kill $CLOUD_SQL_PROXY_PID || true
+          [ -n "$NATS_SERVER_PID" ] && kill $NATS_SERVER_PID || true
 
       - name: Check for Failed Integration Tests
         run: |

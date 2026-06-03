@@ -173,12 +173,13 @@ jobs:
         if: ${{ inputs.use_nats }}
         run: |
           NATS_VERSION="v2.10.18"
-          curl -sL \
+          sudo apt-get install -y unzip
+          curl -sSfL \
             "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.zip" \
             -o nats-server.zip
           unzip -o nats-server.zip
           chmod +x nats-server-${NATS_VERSION}-linux-amd64/nats-server
-          mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
+          sudo mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
           nohup nats-server --port 4222 --http_port 8222 > nats-server.log 2>&1 &
           echo "NATS_SERVER_PID=$!" >> $GITHUB_ENV
           sleep 2

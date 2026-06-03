@@ -132,17 +132,33 @@ jobs:
           name: env-file
           path: ${{ inputs.docker_context }}
 
-      - name: Build and push Docker image
+      - name: Build Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
         id: build
         uses: docker/build-push-action@v4
         with:
           context: ${{ inputs.docker_context }}
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
-          push: true
+          push: false
+          load: true
           tags: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |
             GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+
+      - name: Run Trivy vulnerability scanner on image
+        if: ${{ inputs.deploy_type != 'release-only' }}
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+          ignore-unfixed: true
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Push Docker image
+        if: ${{ inputs.deploy_type != 'release-only' }}
+        run: docker push ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
 
       # --- GKE deploy ---
       - name: Get GKE Credentials

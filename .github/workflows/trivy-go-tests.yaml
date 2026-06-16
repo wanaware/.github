@@ -30,7 +30,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   trivy-scan-and-test:
@@ -68,43 +67,9 @@ jobs:
           format: 'table'
           output: 'trivy-results.txt'
           severity: 'CRITICAL,HIGH,MEDIUM,LOW'
-          exit-code: '1'  
+          exit-code: '1'
 
-      - name: Comment Trivy Results on the Pull Request
-        if: always()
-        run: |
-          echo '### Trivy Scan Results' > comment_trivy.md
-          if [ -s trivy-results.txt ]; then
-            echo '#### Vulnerabilities Found' >> comment_trivy.md
-            echo '```' >> comment_trivy.md
-            cat trivy-results.txt >> comment_trivy.md
-            echo '```' >> comment_trivy.md
-          else
-            echo '#### No vulnerabilities found :white_check_mark:' >> comment_trivy.md
-          fi
-          
-          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_trivy.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Go Unit Tests and Comment Results
+      - name: Run Go Unit Tests
         if: ${{ inputs.run_go_tests }}
         working-directory: ${{ inputs.working_directory }}
-        run: |
-          echo '### Go Unit Test Results' > comment_go_tests.md
-          echo '| Test Name | Status |' >> comment_go_tests.md
-          echo '| --------- | ------ |' >> comment_go_tests.md
-
-          # Run Go tests and check for failures in real-time
-          go test -v ${{ inputs.test_path }} | grep -E '^(--- PASS|--- FAIL)' | sed -E 's/^(--- PASS: )(.*)/\|\2\|Pass\|/; s/^(--- FAIL: )(.*)/\|\2\|Fail\|/' >> comment_go_tests.md
-          
-          # Post test results to PR
-          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_go_tests.md
-
-          # Check for failed tests and exit if any test fails
-          if go test -v ${{ inputs.test_path }} | grep -q '^--- FAIL'; then
-            echo "There are failed tests. Failing the job."
-            exit 1
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go test -v ${{ inputs.test_path }}

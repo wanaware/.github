@@ -18,6 +18,11 @@ on:
         required: false
         default: './tests/...'
         type: string
+      env_artifact_name:
+        description: 'Name of an uploaded .env artifact to download into the working directory before running tests (leave empty to skip). Used to provide runtime env vars (e.g. AUTH0_*) that the app reads at init.'
+        required: false
+        default: ''
+        type: string
     secrets:
       GH_ACCESS_TOKEN:
         description: 'GitHub access token for private repo access (required only if run_go_tests is true)'
@@ -68,6 +73,13 @@ jobs:
           output: 'trivy-results.txt'
           severity: 'CRITICAL,HIGH,MEDIUM,LOW'
           exit-code: '1'
+
+      - name: Download .env artifact
+        if: ${{ inputs.run_go_tests && inputs.env_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.env_artifact_name }}
+          path: ${{ inputs.working_directory }}
 
       - name: Run Go Unit Tests
         if: ${{ inputs.run_go_tests }}

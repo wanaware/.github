@@ -210,29 +210,36 @@ jobs:
         env:
           GOPRIVATE: github.com/wanaware
 
-      # --- Optional: Cloud SQL Proxy ---
-      - name: Authenticate to GCP as Cloud SQL Proxy SA
+      # --- Optional: Cloud SQL via in-cluster proxy (private-IP instance) ---
+      # Cloud SQL is private-IP only (ISO 27001:2022 A.8.24 hardening), so a
+      # GitHub-hosted runner has no route to the instance. Tunnel to the
+      # in-cluster cloud-sql-proxy (deploy postgres-client, svc
+      # cloudsql-proxy-service:5432 in ns tunnel) via kubectl port-forward,
+      # reusing the same GCP_SERVICE_ACCOUNT / GKE-auth pattern deployment.yaml
+      # uses for kubectl rollout restart.
+      - name: Get GKE credentials for DB tunnel
         if: ${{ inputs.use_cloud_sql }}
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/get-gke-credentials@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.CI_SQL_PROXY_SA_EMAIL }}
-          create_credentials_file: true
+          cluster_name: ${{ secrets.CLUSTER_NAME }}
+          location: ${{ secrets.CLUSTER_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
 
-      - name: Download Cloud SQL Proxy
+      - name: Port-forward Cloud SQL via in-cluster proxy
         if: ${{ inputs.use_cloud_sql }}
         run: |
-          curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.7.0/cloud-sql-proxy.linux.amd64
-          chmod +x cloud-sql-proxy
-
-      - name: Enable cloud SQL proxy to temp instance
-        if: ${{ inputs.use_cloud_sql }}
-        run: |
-          nohup ./cloud-sql-proxy ${{ secrets.GCP_PROJECT }}:${{ secrets.CLUSTER_REGION }}:wanaware-database \
-            --port ${{ env.DB_PORT }} \
-            > cloud-sql-proxy.out 2> cloud-sql-proxy.err < /dev/null &
-          echo CLOUD_SQL_PROXY_PID=$! >> $GITHUB_ENV
-          sleep 10
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          nohup kubectl port-forward -n tunnel svc/cloudsql-proxy-service \
+            ${{ env.DB_PORT }}:5432 \
+            > pf.out 2> pf.err < /dev/null &
+          echo "PORT_FORWARD_PID=$!" >> $GITHUB_ENV
+          # Wait for the local listener, tolerating proxy pod cold-start.
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 ${{ env.DB_PORT }}; then echo "tunnel up"; exit 0; fi
+            sleep 2
+          done
+          echo "port-forward did not come up"; cat pf.err; exit 1
 
       - name: Wait for DB server to be reachable
         if: ${{ inputs.use_cloud_sql }}
@@ -498,11 +505,11 @@ jobs:
             python ${{ inputs.post_test_cleanup_script }} "$ACCESS_TOKEN" "${{ inputs.post_test_cleanup_args }}" "$FUNCTION_IDS_STRING"
           fi
 
-      - name: Close App Server & cloud sql proxy
+      - name: Close App Server & DB tunnel
         if: always()
         run: |
           [ -n "$API_PID" ] && kill $API_PID || true
-          [ -n "$CLOUD_SQL_PROXY_PID" ] && kill $CLOUD_SQL_PROXY_PID || true
+          [ -n "$PORT_FORWARD_PID" ] && kill $PORT_FORWARD_PID || true
           [ -n "$NATS_SERVER_PID" ] && kill $NATS_SERVER_PID || true
 
       - name: Check for Failed Integration Tests

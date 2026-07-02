@@ -125,12 +125,19 @@ jobs:
         if: ${{ inputs.deploy_type != 'release-only' }}
         run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
 
+      # The env-file artifact (repo .env + GitHub secrets appended by the caller's
+      # prepare-env job) is no longer baked into the image. It is downloaded to a
+      # neutral path and attached at deploy time as a Kubernetes secret (GKE) or
+      # Secret Manager secrets (Cloud Run), so one image serves all environments.
+      # The image itself only contains the repo's committed .env (common vars).
       - name: Download .env artifact
+        id: env_artifact
         if: ${{ inputs.deploy_type != 'release-only' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: env-file
-          path: ${{ inputs.docker_context }}
+          path: ${{ runner.temp }}/env-file
 
       - name: Build Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
@@ -169,27 +176,74 @@ jobs:
           location: ${{ secrets.CLUSTER_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
+      # Create/update the service's env secret from the env-file artifact so pods
+      # get their env vars at runtime instead of from a baked-in .env. Deployments
+      # reference this secret via envFrom (managed in wanaware-infrastructure).
+      - name: Attach env vars as Kubernetes secret
+        if: ${{ inputs.deploy_type == 'gke' && steps.env_artifact.outcome == 'success' }}
+        run: |
+          ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
+          if [[ -z "$ENV_FILE" ]]; then
+            echo "No .env found in env-file artifact, skipping secret creation."
+            exit 0
+          fi
+          kubectl create secret generic "${{ inputs.service_name }}-env" \
+            -n "${{ inputs.namespace }}" \
+            --from-env-file="$ENV_FILE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Rollout restart (GKE)
         if: ${{ inputs.deploy_type == 'gke' }}
         run: kubectl rollout restart deployment/${{ inputs.deployment_name }} -n ${{ inputs.namespace }}
+
+      # Convert the env-file artifact to the YAML format gcloud expects so the
+      # deploy steps below can attach the env vars directly to the Cloud Run
+      # service/job (--env-vars-file), instead of baking them into the image.
+      - name: Prepare Cloud Run env vars file
+        if: ${{ (inputs.deploy_type == 'cloudrun-service' || inputs.deploy_type == 'cloudrun-job') && steps.env_artifact.outcome == 'success' }}
+        run: |
+          ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
+          if [[ -z "$ENV_FILE" ]]; then
+            echo "No .env found in env-file artifact, skipping Cloud Run env vars."
+            exit 0
+          fi
+          ENV_YAML="$RUNNER_TEMP/cloudrun-env.yaml"
+          : > "$ENV_YAML"
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            case "$line" in ''|\#*) continue ;; esac
+            KEY="${line%%=*}"
+            VALUE="${line#*=}"
+            # escape backslashes and double quotes for YAML double-quoted style
+            VALUE="${VALUE//\\/\\\\}"
+            VALUE="${VALUE//\"/\\\"}"
+            printf '%s: "%s"\n' "$KEY" "$VALUE" >> "$ENV_YAML"
+          done < "$ENV_FILE"
+          echo "CLOUDRUN_ENV_YAML=$ENV_YAML" >> "$GITHUB_ENV"
 
       # --- Cloud Run service deploy ---
       - name: Deploy Cloud Run service
         if: ${{ inputs.deploy_type == 'cloudrun-service' }}
         run: |
+          EXTRA_FLAGS=()
+          [[ -n "$CLOUDRUN_ENV_YAML" ]] && EXTRA_FLAGS+=(--env-vars-file "$CLOUDRUN_ENV_YAML")
           gcloud run deploy ${{ inputs.cloudrun_name }} \
             --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
             --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }}
+            --project ${{ secrets.GCP_PROJECT }} \
+            "${EXTRA_FLAGS[@]}"
 
       # --- Cloud Run job deploy ---
       - name: Deploy Cloud Run job
         if: ${{ inputs.deploy_type == 'cloudrun-job' }}
         run: |
+          EXTRA_FLAGS=()
+          [[ -n "$CLOUDRUN_ENV_YAML" ]] && EXTRA_FLAGS+=(--env-vars-file "$CLOUDRUN_ENV_YAML")
           gcloud run jobs update ${{ inputs.cloudrun_name }} \
             --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
             --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }}
+            --project ${{ secrets.GCP_PROJECT }} \
+            "${EXTRA_FLAGS[@]}"
 
       # --- Optional: graphdoc generation ---
       - name: Set up Go for private modules

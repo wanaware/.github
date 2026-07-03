@@ -187,9 +187,26 @@ jobs:
             echo "No .env found in env-file artifact, skipping secret creation."
             exit 0
           fi
+          # Normalize the .env: strip surrounding quotes from values, matching how
+          # godotenv parses them (kubectl --from-env-file takes values verbatim,
+          # which would keep literal quotes in the env vars).
+          NORMALIZED="$RUNNER_TEMP/normalized.env"
+          : > "$NORMALIZED"
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            case "$line" in ''|\#*) continue ;; esac
+            KEY="${line%%=*}"
+            VALUE="${line#*=}"
+            if [[ "$VALUE" == \"*\" && "$VALUE" == *\" && ${#VALUE} -ge 2 ]]; then
+              VALUE="${VALUE#\"}"; VALUE="${VALUE%\"}"
+            elif [[ "$VALUE" == \'*\' && "$VALUE" == *\' && ${#VALUE} -ge 2 ]]; then
+              VALUE="${VALUE#\'}"; VALUE="${VALUE%\'}"
+            fi
+            printf '%s=%s\n' "$KEY" "$VALUE" >> "$NORMALIZED"
+          done < "$ENV_FILE"
           kubectl create secret generic "${{ inputs.service_name }}-env" \
             -n "${{ inputs.namespace }}" \
-            --from-env-file="$ENV_FILE" \
+            --from-env-file="$NORMALIZED" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Rollout restart (GKE)
@@ -214,6 +231,12 @@ jobs:
             case "$line" in ''|\#*) continue ;; esac
             KEY="${line%%=*}"
             VALUE="${line#*=}"
+            # strip surrounding quotes, matching how godotenv parses .env values
+            if [[ "$VALUE" == \"*\" && "$VALUE" == *\" && ${#VALUE} -ge 2 ]]; then
+              VALUE="${VALUE#\"}"; VALUE="${VALUE%\"}"
+            elif [[ "$VALUE" == \'*\' && "$VALUE" == *\' && ${#VALUE} -ge 2 ]]; then
+              VALUE="${VALUE#\'}"; VALUE="${VALUE%\'}"
+            fi
             # escape backslashes and double quotes for YAML double-quoted style
             VALUE="${VALUE//\\/\\\\}"
             VALUE="${VALUE//\"/\\\"}"

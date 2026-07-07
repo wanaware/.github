@@ -37,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      use_nats_port_forward:
+        description: 'Port-forward to in-cluster NATS service (requires GKE credentials). Use instead of use_nats when JetStream or cluster state is needed.'
+        required: false
+        default: false
+        type: boolean
       use_cloud_sql:
         description: 'Start Cloud SQL Proxy and connect to the DB'
         required: false
@@ -190,6 +195,41 @@ jobs:
         run: |
           curl --fail --silent --retry 5 --retry-delay 1 \
             http://127.0.0.1:8222/healthz
+
+      # --- Optional: NATS via in-cluster port-forward ---
+      # Use when tests require JetStream or cluster NATS state.
+      # Reuses GKE credentials obtained for Cloud SQL (or authenticates if Cloud SQL is disabled).
+      - name: Get GKE credentials for NATS tunnel
+        if: ${{ inputs.use_nats_port_forward }}
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.CLUSTER_NAME }}
+          location: ${{ secrets.CLUSTER_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Port-forward NATS via in-cluster service
+        if: ${{ inputs.use_nats_port_forward }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          nohup kubectl port-forward -n nats svc/nats \
+            ${{ env.NATS_PORT }}:4222 \
+            > nats-pf.out 2> nats-pf.err < /dev/null &
+          echo "NATS_PORT_FORWARD_PID=$!" >> $GITHUB_ENV
+          # Wait for the local listener
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 ${{ env.NATS_PORT }}; then
+              echo "NATS tunnel up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "NATS port-forward did not come up"; cat nats-pf.err; exit 1
+
+      - name: Verify NATS port-forward is reachable
+        if: ${{ inputs.use_nats_port_forward }}
+        run: |
+          echo "NATS_URL=nats://127.0.0.1:${{ env.NATS_PORT }}" >> $GITHUB_ENV
 
       # --- Go private module access ---
       - name: Set up Go environment for private repo access
@@ -511,6 +551,7 @@ jobs:
           [ -n "$API_PID" ] && kill $API_PID || true
           [ -n "$PORT_FORWARD_PID" ] && kill $PORT_FORWARD_PID || true
           [ -n "$NATS_SERVER_PID" ] && kill $NATS_SERVER_PID || true
+          [ -n "$NATS_PORT_FORWARD_PID" ] && kill $NATS_PORT_FORWARD_PID || true
 
       - name: Check for Failed Integration Tests
         run: |

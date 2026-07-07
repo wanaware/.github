@@ -198,6 +198,7 @@ jobs:
 
       # --- Optional: NATS via in-cluster port-forward ---
       # Use when tests require JetStream or cluster NATS state.
+      # Adds /etc/hosts entry so TLS cert verification passes (cert SAN = nats.nats.svc).
       - name: Get GKE credentials for NATS tunnel
         if: ${{ inputs.use_nats_port_forward }}
         uses: google-github-actions/get-gke-credentials@v2
@@ -211,6 +212,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          # Add hosts entry so TLS server name matches the cert SAN
+          echo "127.0.0.1 nats.nats.svc" | sudo tee -a /etc/hosts
           nohup kubectl port-forward -n nats svc/nats \
             ${{ env.NATS_PORT }}:4222 \
             > nats-pf.out 2> nats-pf.err < /dev/null &
@@ -231,9 +234,9 @@ jobs:
           wait_time=5
           max_attempts=3
           for i in $(seq 1 $max_attempts); do
-            if nc -zv 127.0.0.1 ${{ env.NATS_PORT }}; then
+            if nc -zv nats.nats.svc ${{ env.NATS_PORT }}; then
               echo "NATS server is reachable!"
-              echo "NATS_URL=nats://127.0.0.1:${{ env.NATS_PORT }}" >> $GITHUB_ENV
+              echo "NATS_URL=tls://nats.nats.svc:${{ env.NATS_PORT }}" >> $GITHUB_ENV
               exit 0
             fi
             echo "Attempt $i failed. Waiting ${wait_time}s..."

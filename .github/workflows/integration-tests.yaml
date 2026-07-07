@@ -198,7 +198,7 @@ jobs:
 
       # --- Optional: NATS via in-cluster port-forward ---
       # Use when tests require JetStream or cluster NATS state.
-      # Reuses GKE credentials obtained for Cloud SQL (or authenticates if Cloud SQL is disabled).
+      # Reuses GKE credentials if already exists or authenticates.
       - name: Get GKE credentials for NATS tunnel
         if: ${{ inputs.use_nats_port_forward }}
         uses: google-github-actions/get-gke-credentials@v2

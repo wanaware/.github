@@ -204,9 +204,14 @@ jobs:
             fi
             printf '%s=%s\n' "$KEY" "$VALUE" >> "$NORMALIZED"
           done < "$ENV_FILE"
+          # Dedupe keys keeping the last occurrence (godotenv lets later entries
+          # win, e.g. a secret appended after the same key in the committed .env;
+          # kubectl --from-env-file errors on duplicates instead).
+          DEDUPED="$RUNNER_TEMP/deduped.env"
+          tac "$NORMALIZED" | awk -F= '!seen[$1]++' | tac > "$DEDUPED"
           kubectl create secret generic "${{ inputs.service_name }}-env" \
             -n "${{ inputs.namespace }}" \
-            --from-env-file="$NORMALIZED" \
+            --from-env-file="$DEDUPED" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Rollout restart (GKE)
@@ -242,7 +247,11 @@ jobs:
             VALUE="${VALUE//\"/\\\"}"
             printf '%s: "%s"\n' "$KEY" "$VALUE" >> "$ENV_YAML"
           done < "$ENV_FILE"
-          echo "CLOUDRUN_ENV_YAML=$ENV_YAML" >> "$GITHUB_ENV"
+          # Dedupe keys keeping the last occurrence (matches godotenv semantics;
+          # duplicate YAML keys would otherwise be rejected or ambiguous).
+          DEDUPED_YAML="$RUNNER_TEMP/cloudrun-env-deduped.yaml"
+          tac "$ENV_YAML" | awk -F: '!seen[$1]++' | tac > "$DEDUPED_YAML"
+          echo "CLOUDRUN_ENV_YAML=$DEDUPED_YAML" >> "$GITHUB_ENV"
 
       # --- Cloud Run service deploy ---
       - name: Deploy Cloud Run service
@@ -307,7 +316,7 @@ jobs:
           SHORTSHA=$(git rev-parse --short "$GITHUB_SHA")
           DATE=$(TZ=Asia/Karachi date +%Y.%m.%d.%H%M)
 
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          if [[ "${{ github.ref }}" == "refs/heads/prod" ]]; then
             ENV="prod"
             ENV_NAME="production"
             IS_PRERELEASE="false"
@@ -378,7 +387,7 @@ jobs:
 
       - name: Update GCS release history
         if: steps.deploy_status.outputs.success == 'true'
-        uses: WanAware/.github/.github/actions/gcs-history@main
+        uses: WanAware/.github/.github/actions/gcs-history@prod
         with:
           bucket_name: ${{ secrets.BUCKET_NAME }}
           env: ${{ env.DEPLOY_ENV }}

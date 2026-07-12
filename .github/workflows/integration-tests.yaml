@@ -4,98 +4,103 @@ on:
   workflow_call:
     inputs:
       go_version:
-        description: 'Go version to use'
+        description: "Go version to use"
         required: false
-        default: '1.24.6'
+        default: "1.24.6"
         type: string
       server_cmd:
-        description: 'Go main file to run the server (e.g. ./cmd/fleet-manager/main.go)'
+        description: "Go main file to run the server (e.g. ./cmd/fleet-manager/main.go)"
         required: true
         type: string
       wait_for_it_path:
-        description: 'Path to wait-for-it.sh script'
+        description: "Path to wait-for-it.sh script"
         required: false
-        default: './scripts/wait-for-it.sh'
+        default: "./scripts/wait-for-it.sh"
         type: string
       postman_collection:
-        description: 'Path to the Postman collection JSON file (required if not using test_runner_script)'
+        description: "Path to the Postman collection JSON file (required if not using test_runner_script)"
         required: false
-        default: ''
+        default: ""
         type: string
       newman_extra_args:
-        description: 'Extra args to pass to newman (e.g. --delay-request 500)'
+        description: "Extra args to pass to newman (e.g. --delay-request 500)"
         required: false
-        default: ''
+        default: ""
         type: string
       use_redis:
-        description: 'Start a local Redis instance'
+        description: "Start a local Redis instance"
         required: false
         default: true
         type: boolean
       use_nats:
-        description: 'Start a local NATS server instance'
+        description: "Start a local NATS server instance"
+        required: false
+        default: false
+        type: boolean
+      use_nats_port_forward:
+        description: "Port-forward to in-cluster NATS service (requires GKE credentials). Use instead of use_nats when JetStream or cluster state is needed."
         required: false
         default: false
         type: boolean
       use_cloud_sql:
-        description: 'Start Cloud SQL Proxy and connect to the DB'
+        description: "Start Cloud SQL Proxy and connect to the DB"
         required: false
         default: true
         type: boolean
       server_env:
-        description: 'Multiline env vars to export before starting the Go server (KEY=VALUE format)'
+        description: "Multiline env vars to export before starting the Go server (KEY=VALUE format)"
         required: false
-        default: ''
+        default: ""
         type: string
       access_token_script:
-        description: 'Path to Python script that fetches access tokens'
+        description: "Path to Python script that fetches access tokens"
         required: false
-        default: './scripts/get_access_token.py'
+        default: "./scripts/get_access_token.py"
         type: string
       skip_access_token:
-        description: 'Skip the access token fetching step entirely'
+        description: "Skip the access token fetching step entirely"
         required: false
         default: false
         type: boolean
       newman_env_json:
-        description: 'JSON string for Newman environment variables (injected into newman_env.json)'
+        description: "JSON string for Newman environment variables (injected into newman_env.json)"
         required: false
-        default: ''
+        default: ""
         type: string
       cleanup_script:
-        description: 'Path to cleanup script to run before tests (e.g. ./shell_scripts/cleanup-test-data.sh)'
+        description: "Path to cleanup script to run before tests (e.g. ./shell_scripts/cleanup-test-data.sh)"
         required: false
-        default: ''
+        default: ""
         type: string
       pre_test_setup_script:
-        description: 'Path to Python script for pre-test setup (e.g. ./shell_scripts/create_and_capture_ids.py)'
+        description: "Path to Python script for pre-test setup (e.g. ./shell_scripts/create_and_capture_ids.py)"
         required: false
-        default: ''
+        default: ""
         type: string
       delete_data_tags_script:
-        description: 'Path to Python script to delete data tags before tests (e.g. ./shell_scripts/delete_data_tags.py)'
+        description: "Path to Python script to delete data tags before tests (e.g. ./shell_scripts/delete_data_tags.py)"
         required: false
-        default: ''
+        default: ""
         type: string
       test_runner_script:
-        description: 'Path to custom test runner script instead of direct newman (e.g. ./shell_scripts/run-all-api-tests.sh)'
+        description: "Path to custom test runner script instead of direct newman (e.g. ./shell_scripts/run-all-api-tests.sh)"
         required: false
-        default: ''
+        default: ""
         type: string
       post_test_cleanup_script:
-        description: 'Path to Python script for post-test cleanup (e.g. ./shell_scripts/delete_nodes.py)'
+        description: "Path to Python script for post-test cleanup (e.g. ./shell_scripts/delete_nodes.py)"
         required: false
-        default: ''
+        default: ""
         type: string
       post_test_cleanup_args:
-        description: 'Arguments for post-test cleanup script (e.g. Function for node type)'
+        description: "Arguments for post-test cleanup script (e.g. Function for node type)"
         required: false
-        default: ''
+        default: ""
         type: string
       working_directory:
-        description: 'Directory containing go.mod (for monorepos). Defaults to repo root. When set, relative paths such as server_cmd are resolved from this directory.'
+        description: "Directory containing go.mod (for monorepos). Defaults to repo root. When set, relative paths such as server_cmd are resolved from this directory."
         required: false
-        default: '.'
+        default: "."
         type: string
 
 jobs:
@@ -190,6 +195,56 @@ jobs:
         run: |
           curl --fail --silent --retry 5 --retry-delay 1 \
             http://127.0.0.1:8222/healthz
+
+      # --- Optional: NATS via in-cluster port-forward ---
+      # Use when tests require JetStream or cluster NATS state.
+      # Adds /etc/hosts entry so TLS cert verification passes (cert SAN = nats.nats.svc).
+      - name: Get GKE credentials for NATS tunnel
+        if: ${{ inputs.use_nats_port_forward }}
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.CLUSTER_NAME }}
+          location: ${{ secrets.CLUSTER_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Port-forward NATS via in-cluster service
+        if: ${{ inputs.use_nats_port_forward }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          # Add hosts entry so TLS server name matches the cert SAN
+          echo "127.0.0.1 nats.nats.svc" | sudo tee -a /etc/hosts
+          nohup kubectl port-forward -n nats svc/nats \
+            ${{ env.NATS_PORT }}:4222 \
+            > nats-pf.out 2> nats-pf.err < /dev/null &
+          echo "NATS_PORT_FORWARD_PID=$!" >> $GITHUB_ENV
+          # Wait for the local listener
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 ${{ env.NATS_PORT }}; then
+              echo "NATS tunnel up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "NATS port-forward did not come up"; cat nats-pf.err; exit 1
+
+      - name: Wait for NATS to be reachable
+        if: ${{ inputs.use_nats_port_forward }}
+        run: |
+          wait_time=5
+          max_attempts=3
+          for i in $(seq 1 $max_attempts); do
+            if nc -zv nats.nats.svc ${{ env.NATS_PORT }}; then
+              echo "NATS server is reachable!"
+              echo "NATS_URL=tls://nats.nats.svc:${{ env.NATS_PORT }}" >> $GITHUB_ENV
+              exit 0
+            fi
+            echo "Attempt $i failed. Waiting ${wait_time}s..."
+            sleep $wait_time
+            wait_time=$((wait_time * 2))
+          done
+          echo "NATS server did not become reachable in time"
+          exit 1
 
       # --- Go private module access ---
       - name: Set up Go environment for private repo access
@@ -354,7 +409,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.8'
+          python-version: "3.8"
 
       - name: Install pip and dependencies
         run: |
@@ -511,6 +566,7 @@ jobs:
           [ -n "$API_PID" ] && kill $API_PID || true
           [ -n "$PORT_FORWARD_PID" ] && kill $PORT_FORWARD_PID || true
           [ -n "$NATS_SERVER_PID" ] && kill $NATS_SERVER_PID || true
+          [ -n "$NATS_PORT_FORWARD_PID" ] && kill $NATS_PORT_FORWARD_PID || true
 
       - name: Check for Failed Integration Tests
         run: |

@@ -316,7 +316,7 @@ jobs:
           SHORTSHA=$(git rev-parse --short "$GITHUB_SHA")
           DATE=$(TZ=Asia/Karachi date +%Y.%m.%d.%H%M)
 
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          if [[ "${{ github.ref }}" == "refs/heads/prod" ]]; then
             ENV="prod"
             ENV_NAME="production"
             IS_PRERELEASE="false"
@@ -387,7 +387,7 @@ jobs:
 
       - name: Update GCS release history
         if: steps.deploy_status.outputs.success == 'true'
-        uses: WanAware/.github/.github/actions/gcs-history@main
+        uses: WanAware/.github/.github/actions/gcs-history@prod
         with:
           bucket_name: ${{ secrets.BUCKET_NAME }}
           env: ${{ env.DEPLOY_ENV }}

@@ -185,7 +185,7 @@ jobs:
           unzip -o nats-server.zip
           chmod +x nats-server-${NATS_VERSION}-linux-amd64/nats-server
           sudo mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
-          nohup nats-server --port 4222 --http_port 8222 > nats-server.log 2>&1 &
+          nohup nats-server --port 4222 --http_port 8222 -js -sd /tmp/nats-jetstream > nats-server.log 2>&1 &
           echo "NATS_SERVER_PID=$!" >> $GITHUB_ENV
           sleep 2
           echo "NATS_URL=nats://127.0.0.1:4222" >> $GITHUB_ENV

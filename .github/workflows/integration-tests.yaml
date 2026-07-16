@@ -37,8 +37,13 @@ on:
         required: false
         default: false
         type: boolean
+      use_nats_jetstream:
+        description: "Enable JetStream on the local NATS server (requires use_nats=true). Adds -js flag so streams and consumers can be created locally."
+        required: false
+        default: false
+        type: boolean
       use_nats_port_forward:
-        description: "Port-forward to in-cluster NATS service (requires GKE credentials). Use instead of use_nats when JetStream or cluster state is needed."
+        description: "Port-forward to in-cluster NATS service (requires GKE credentials). Use instead of use_nats when cluster NATS state is needed."
         required: false
         default: false
         type: boolean
@@ -185,7 +190,12 @@ jobs:
           unzip -o nats-server.zip
           chmod +x nats-server-${NATS_VERSION}-linux-amd64/nats-server
           sudo mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
-          nohup nats-server --port 4222 --http_port 8222 > nats-server.log 2>&1 &
+          JS_FLAG=""
+          if [[ "${{ inputs.use_nats_jetstream }}" == "true" ]]; then
+            JS_FLAG="-js"
+            echo "Enabling JetStream on local NATS server"
+          fi
+          nohup nats-server --port 4222 --http_port 8222 $JS_FLAG > nats-server.log 2>&1 &
           echo "NATS_SERVER_PID=$!" >> $GITHUB_ENV
           sleep 2
           echo "NATS_URL=nats://127.0.0.1:4222" >> $GITHUB_ENV
@@ -196,8 +206,18 @@ jobs:
           curl --fail --silent --retry 5 --retry-delay 1 \
             http://127.0.0.1:8222/healthz
 
+      - name: Verify JetStream is enabled
+        if: ${{ inputs.use_nats && inputs.use_nats_jetstream }}
+        run: |
+          JS_INFO=$(curl --fail --silent --retry 5 --retry-delay 1 http://127.0.0.1:8222/jsz)
+          echo "JetStream info: $JS_INFO"
+          if echo "$JS_INFO" | grep -q '"disabled"'; then
+            echo "JetStream failed to start"; exit 1
+          fi
+          echo "JetStream is operational"
+
       # --- Optional: NATS via in-cluster port-forward ---
-      # Use when tests require JetStream or cluster NATS state.
+      # Use when tests require in-cluster NATS state (e.g. shared streams, TLS, NKey auth).
       # Adds /etc/hosts entry so TLS cert verification passes (cert SAN = nats.nats.svc).
       - name: Get GKE credentials for NATS tunnel
         if: ${{ inputs.use_nats_port_forward }}

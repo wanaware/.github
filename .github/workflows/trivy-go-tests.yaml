@@ -34,7 +34,9 @@ permissions:
 jobs:
   trivy-scan-and-test:
     name: Run Trivy Scan and Go Tests
-    runs-on: ubuntu-latest
+    # In-house ARC. PR-time checks aren't tied to an env yet, so they run on the dev cluster's
+    # runners (arc-shared-dev). Nothing runs on GitHub-hosted runners.
+    runs-on: arc-shared-dev
     environment: development
 
     steps:

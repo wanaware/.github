@@ -3,6 +3,11 @@ name: Integration Tests
 on:
   workflow_call:
     inputs:
+      runner:
+        description: "Runner label for runs-on. Default ubuntu-latest (GitHub-hosted); set to an ARC scale set name (e.g. arc-fleet-manager-dev) to run in-cluster."
+        required: false
+        default: "ubuntu-latest"
+        type: string
       go_version:
         description: "Go version to use"
         required: false
@@ -111,7 +116,7 @@ on:
 jobs:
   integration-test:
     name: Run Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     environment: development
     permissions:
       contents: read

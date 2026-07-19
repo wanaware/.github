@@ -3,6 +3,11 @@ name: Build and Deploy
 on:
   workflow_call:
     inputs:
+      runner:
+        description: 'Runner label for runs-on. Default ubuntu-latest (GitHub-hosted); set to an ARC scale set name (e.g. arc-fleet-manager-dev) to run in-cluster.'
+        required: false
+        default: 'ubuntu-latest'
+        type: string
       environment_name:
         description: 'Deployment environment (development, staging, production)'
         required: false
@@ -95,7 +100,7 @@ on:
 jobs:
   deploy:
     name: Build, Publish, and Deploy
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
 
     environment: ${{ inputs.environment_name }}
 

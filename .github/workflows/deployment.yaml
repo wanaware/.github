@@ -3,6 +3,11 @@ name: Build and Deploy
 on:
   workflow_call:
     inputs:
+      runner:
+        description: 'Escape-hatch override for runs-on. Leave empty (default) to auto-select the in-house ARC scale set for the target env (arc-shared-dev|stage|prod, derived from environment_name). Set to "ubuntu-latest" or a specific label only to opt a job out of ARC.'
+        required: false
+        default: ''
+        type: string
       environment_name:
         description: 'Deployment environment (development, staging, production)'
         required: false
@@ -95,7 +100,15 @@ on:
 jobs:
   deploy:
     name: Build, Publish, and Deploy
-    runs-on: ubuntu-latest
+    # In-house ARC runners by default. The env comes from environment_name (which the caller
+    # already derives from its branch: dev->development, stage->staging, prod->production), so a
+    # merge to dev runs on wanaware-core-dev's cluster, stage on stage, prod on prod. `runner` is
+    # an escape hatch: set it non-empty to force ubuntu-latest or a specific label for one caller.
+    runs-on: >-
+      ${{ inputs.runner != '' && inputs.runner
+       || inputs.environment_name == 'production' && 'arc-shared-prod'
+       || inputs.environment_name == 'staging' && 'arc-shared-stage'
+       || 'arc-shared-dev' }}
 
     environment: ${{ inputs.environment_name }}
 

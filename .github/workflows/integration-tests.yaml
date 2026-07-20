@@ -3,6 +3,11 @@ name: Integration Tests
 on:
   workflow_call:
     inputs:
+      runner:
+        description: "Escape-hatch override for runs-on. Leave empty (default) to run on the in-house dev ARC scale set (arc-shared-dev) — integration tests always run against the dev tier (environment: development, PRs to dev). Set to 'ubuntu-latest' or a specific label only to opt out of ARC."
+        required: false
+        default: ""
+        type: string
       go_version:
         description: "Go version to use"
         required: false
@@ -111,7 +116,9 @@ on:
 jobs:
   integration-test:
     name: Run Integration Tests
-    runs-on: ubuntu-latest
+    # In-house ARC by default; integration tests always target the dev tier (arc-shared-dev).
+    # `runner` is an escape hatch (set non-empty to force ubuntu-latest / a specific label).
+    runs-on: ${{ inputs.runner != '' && inputs.runner || 'arc-shared-dev' }}
     environment: development
     permissions:
       contents: read

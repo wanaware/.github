@@ -371,6 +371,7 @@ jobs:
           GOPRIVATE: github.com/wanaware
 
       - name: Start Go server
+        working-directory: ${{ inputs.working_directory }}
         run: |
           chmod +x ${{ inputs.wait_for_it_path }}
           # Write extra server env vars to a temp file and source it

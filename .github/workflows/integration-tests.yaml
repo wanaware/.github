@@ -135,6 +135,13 @@ jobs:
           name: env-file
           path: .
 
+      - name: Copy artifact files to working directory
+        if: ${{ inputs.working_directory != '.' }}
+        run: |
+          cp -f .env ${{ inputs.working_directory }}/.env 2>/dev/null || true
+          cp -f nats-nkey.seed ${{ inputs.working_directory }}/nats-nkey.seed 2>/dev/null || true
+          cp -f ca.crt ${{ inputs.working_directory }}/ca.crt 2>/dev/null || true
+
       - name: Load environment variables from .env
         run: |
           while IFS= read -r line || [ -n "$line" ]; do
@@ -426,7 +433,7 @@ jobs:
             wait_time=$((wait_time * 2))
           done
           echo "API server did not become reachable in time"
-          cat server.log
+          cat ${{ inputs.working_directory }}/server.log || true
           exit 1
 
       # --- Newman tests ---

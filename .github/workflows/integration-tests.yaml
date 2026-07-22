@@ -373,7 +373,6 @@ jobs:
       - name: Start Go server
         working-directory: ${{ inputs.working_directory }}
         run: |
-          chmod +x ${{ inputs.wait_for_it_path }}
           # Write extra server env vars to a temp file and source it
           if [ -n "$SERVER_ENV" ]; then
             echo "$SERVER_ENV" > /tmp/server_extra.env
@@ -543,6 +542,7 @@ jobs:
         id: custom_runner
         continue-on-error: true
         run: |
+          chmod +x ${{ inputs.wait_for_it_path }}
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           chmod +x ${{ inputs.test_runner_script }}
           ${{ inputs.test_runner_script }} "$ACCESS_TOKEN" "$FUNCTION_IDS" "$CUSTOMER_ID"
@@ -551,6 +551,7 @@ jobs:
       - name: Run Integration Tests (newman)
         if: ${{ inputs.test_runner_script == '' }}
         run: |
+          chmod +x ${{ inputs.wait_for_it_path }}
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           echo "NEWMAN_FAILED=false" >> $GITHUB_ENV
 

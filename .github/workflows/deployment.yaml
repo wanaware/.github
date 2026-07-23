@@ -123,20 +123,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Authenticate with GCP
+      # --- GCR push to shared account ---
+
+      # NOTE: we push to the shared account first so that steps following
+      # this build/push (e.g. GKE deploy) use the normal gcloud credentials.
+      # all steps related to the shared account are allowed to fail so 
+      # that existing workflows are not impacted.
+      - name: Authenticate with GCP Shared Account
         uses: google-github-actions/auth@v2
+        continue-on-error: true
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
 
-      - name: Set up gcloud
+      - name: Set up gcloud for GCP Shared Account
         uses: google-github-actions/setup-gcloud@v2
+        continue-on-error: true
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
+          project_id: ${{ secrets.GCP_PROJECT_SHARED }}
 
-      - name: Configure Docker to use the gcloud command-line tool as a credential helper
+      - name: Configure Docker to use the gcloud command-line tool as a credential helper for GCP Shared Registry
+        continue-on-error: true
         if: ${{ inputs.deploy_type != 'release-only' }}
-        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY_SHARED }}
 
       # The env-file artifact (repo .env + GitHub secrets appended by the caller's
       # prepare-env job) is no longer baked into the image. It is downloaded to a
@@ -161,7 +170,9 @@ jobs:
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: false
           load: true
-          tags: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+          tags: |
+            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
+            ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |
             GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
 
@@ -175,6 +186,27 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+
+      - name: Push Docker image to GCP Shared Account
+        continue-on-error: true
+        if: ${{ inputs.deploy_type != 'release-only' }}
+        run: docker push ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
+
+      # --- GCR push to standard account ---
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Configure Docker to use the gcloud command-line tool as a credential helper
+        if: ${{ inputs.deploy_type != 'release-only' }}
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
 
       - name: Push Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}

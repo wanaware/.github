@@ -186,21 +186,17 @@ jobs:
           build-args: |
             GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
 
-      # we use a separete step here for the shared account instead of line separated tags to ensure
-      # that we still continue on error if this step fails.
-      - name: Build Docker image for GCP Shared Account
+      # Retag the already-built standard image for the shared registry.
+      # A separate step (rather than an additional tag in the build step) keeps
+      # continue-on-error scoped to this step alone.
+      - name: Tag Docker image for GCP Shared Account
         if: ${{ inputs.deploy_type != 'release-only' }}
         continue-on-error: true
-        id: build-shared
-        uses: docker/build-push-action@v4
-        with:
-          context: ${{ inputs.docker_context }}
-          file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
-          push: false
-          load: true
-          tags: ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
-          build-args: |
-            GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+        id: tag_shared
+        run: |
+          docker tag \
+            ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
+            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
 
       # only a single scan is required since both images are identical with different tags
       - name: Run Trivy vulnerability scanner on image

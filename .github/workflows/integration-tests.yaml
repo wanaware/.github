@@ -121,6 +121,7 @@ jobs:
     runs-on: ${{ inputs.runner != '' && inputs.runner || 'arc-shared-dev' }}
     environment: development
     permissions:
+      actions: read        # needed by `gh run download` to fetch the env-file artifact
       contents: read
       id-token: write
       pull-requests: write
@@ -129,11 +130,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
+      # download-artifact@v4 resolves the artifact through the run-scoped Artifacts
+      # v4 API. On ephemeral ARC pods the results service is occasionally not yet
+      # consistent for the run when the pod starts, returning a *non-retryable*
+      # "404 workflow run not found". That window closes within seconds, so retry
+      # the download instead of failing the whole job on the first miss.
       - name: Download .env artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if gh run download "${{ github.run_id }}" -n env-file -D .; then
+              echo "Downloaded env-file on attempt $i"
+              exit 0
+            fi
+            echo "env-file download attempt $i failed (artifact backend not consistent yet), retrying in 15s..."
+            sleep 15
+          done
+          echo "env-file artifact never became downloadable after 5 attempts"
+          exit 1
 
       - name: Load environment variables from .env
         run: |

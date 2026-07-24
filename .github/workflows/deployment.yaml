@@ -97,6 +97,18 @@ on:
       BUCKET_NAME:
         required: false
 
+      # secrets for shared image push
+      GCP_SERVICE_ACCOUNT_SHARED:
+        required: true
+        description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
+      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
+        required: true
+        description: 'Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider).'
+      GCP_PROJECT_SHARED:
+        required: false
+      GCP_REGISTRY_SHARED:
+        required: false
+
 jobs:
   deploy:
     name: Build, Publish, and Deploy
@@ -179,7 +191,7 @@ jobs:
       - name: Build Docker image for GCP Shared Account
         if: ${{ inputs.deploy_type != 'release-only' }}
         continue-on-error: true
-        id: build
+        id: build-shared
         uses: docker/build-push-action@v4
         with:
           context: ${{ inputs.docker_context }}

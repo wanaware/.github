@@ -116,6 +116,7 @@ jobs:
     # in their own workflow, otherwise GitHub will not issue an OIDC token and
     # the Authenticate with GCP step will fail.
     permissions:
+      actions: read        # needed by `gh run download` to fetch the env-file artifact
       contents: write
       id-token: write
 
@@ -143,14 +144,31 @@ jobs:
       # neutral path and attached at deploy time as a Kubernetes secret (GKE) or
       # Secret Manager secrets (Cloud Run), so one image serves all environments.
       # The image itself only contains the repo's committed .env (common vars).
+      # download-artifact@v4 resolves the artifact through the run-scoped Artifacts
+      # v4 API. On ephemeral ARC pods the results service is occasionally not yet
+      # consistent for the run when the pod starts, returning a transient 404 that
+      # the action would surface as a hard miss. That would make this step "fail"
+      # and, via the outcome gate below, silently deploy WITHOUT the env secrets.
+      # Retry the download so a transient 404 doesn't get mistaken for "no artifact".
+      # A genuinely absent artifact (caller has no prepare-env job) still exhausts
+      # the loop and leaves outcome != success, which the gates below tolerate.
       - name: Download .env artifact
         id: env_artifact
         if: ${{ inputs.deploy_type != 'release-only' }}
         continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: ${{ runner.temp }}/env-file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if gh run download "${{ github.run_id }}" -n env-file -D "${{ runner.temp }}/env-file"; then
+              echo "Downloaded env-file on attempt $i"
+              exit 0
+            fi
+            echo "env-file download attempt $i failed (transient 404 or artifact absent), retrying in 15s..."
+            sleep 15
+          done
+          echo "env-file artifact not downloadable after 5 attempts; deploy will proceed without attached env secrets"
+          exit 1
 
       - name: Build Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}

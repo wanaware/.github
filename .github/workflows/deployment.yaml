@@ -116,7 +116,6 @@ jobs:
     # in their own workflow, otherwise GitHub will not issue an OIDC token and
     # the Authenticate with GCP step will fail.
     permissions:
-      actions: read        # needed by `gh run download` to fetch the env-file artifact
       contents: write
       id-token: write
 
@@ -145,29 +144,61 @@ jobs:
       # Secret Manager secrets (Cloud Run), so one image serves all environments.
       # The image itself only contains the repo's committed .env (common vars).
       # download-artifact@v4 resolves the artifact through the run-scoped Artifacts
-      # v4 API. On ephemeral ARC pods the results service is occasionally not yet
-      # consistent for the run when the pod starts, returning a transient 404 that
-      # the action would surface as a hard miss. That would make this step "fail"
-      # and, via the outcome gate below, silently deploy WITHOUT the env secrets.
-      # Retry the download so a transient 404 doesn't get mistaken for "no artifact".
-      # A genuinely absent artifact (caller has no prepare-env job) still exhausts
-      # the loop and leaves outcome != success, which the gates below tolerate.
-      - name: Download .env artifact
+      # v4 API (authenticated by the injected runtime token, so no `actions:`
+      # permission is needed). On ephemeral ARC pods the results service is
+      # occasionally not yet consistent for the run when the pod starts, returning
+      # a transient 404. Without a retry that 404 is mistaken for "no artifact" and,
+      # via the outcome gate below, the service deploys WITHOUT its env secrets.
+      # Re-run the action a few times with a gap; each attempt is continue-on-error.
+      # The final `env_artifact` step (whose outcome the gates below key on) then
+      # succeeds iff a .env was actually downloaded, so a genuinely absent artifact
+      # still leaves outcome != success and the gates skip cleanly as before.
+      - name: Download .env artifact (attempt 1)
+        id: dl1
+        if: ${{ inputs.deploy_type != 'release-only' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: env-file
+          path: ${{ runner.temp }}/env-file
+
+      - name: Wait before .env retry 2
+        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' }}
+        run: sleep 15
+      - name: Download .env artifact (attempt 2)
+        id: dl2
+        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: env-file
+          path: ${{ runner.temp }}/env-file
+
+      - name: Wait before .env retry 3
+        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
+        run: sleep 30
+      - name: Download .env artifact (attempt 3)
+        id: dl3
+        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: env-file
+          path: ${{ runner.temp }}/env-file
+
+      # Single, stable signal the downstream gates key on: success iff a .env was
+      # actually downloaded by any attempt above. A genuinely absent artifact
+      # leaves this at 'failure' (continue-on-error keeps the deploy going).
+      - name: Resolve env-file download outcome
         id: env_artifact
         if: ${{ inputs.deploy_type != 'release-only' }}
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          for i in 1 2 3 4 5; do
-            if gh run download "${{ github.run_id }}" -n env-file -D "${{ runner.temp }}/env-file"; then
-              echo "Downloaded env-file on attempt $i"
-              exit 0
-            fi
-            echo "env-file download attempt $i failed (transient 404 or artifact absent), retrying in 15s..."
-            sleep 15
-          done
-          echo "env-file artifact not downloadable after 5 attempts; deploy will proceed without attached env secrets"
+          if find "${{ runner.temp }}/env-file" -name '.env' -type f | grep -q .; then
+            echo "env-file present"
+            exit 0
+          fi
+          echo "env-file not downloaded after 3 attempts; deploy will proceed without attached env secrets"
           exit 1
 
       - name: Build Docker image

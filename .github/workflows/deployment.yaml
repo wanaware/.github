@@ -99,10 +99,10 @@ on:
 
       # secrets for shared image push
       GCP_SERVICE_ACCOUNT_SHARED:
-        required: true
+        required: false
         description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
       GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
-        required: true
+        required: false
         description: 'Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider).'
       GCP_PROJECT_SHARED:
         required: false

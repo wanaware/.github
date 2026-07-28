@@ -97,6 +97,22 @@ on:
       BUCKET_NAME:
         required: false
 
+      # Secrets for the optional shared-registry push (see the
+      # push-to-shared-registry job below). All optional: when they are not set
+      # the shared push is skipped and nothing else changes.
+      GCP_SERVICE_ACCOUNT_SHARED:
+        required: false
+        description: 'Shared-project GCP service account email to impersonate via WIF.'
+      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
+        required: false
+        description: 'Full WIF provider resource name for the shared project.'
+      GCP_PROJECT_SHARED:
+        required: false
+        description: 'Shared GCP project ID that receives the image.'
+      GCP_REGISTRY_SHARED:
+        required: false
+        description: 'Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev).'
+
 jobs:
   deploy:
     name: Build, Publish, and Deploy
@@ -467,3 +483,35 @@ jobs:
       - name: Upload release files to GCS
         if: ${{ inputs.upload_release_files && !inputs.generate_docs }}
         run: gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}/
+
+  # Optional, best-effort push of the service image to the shared GCP project so
+  # the wanaware-operator can pull and run it. Kept as a separate job calling a
+  # separate workflow so it is fully isolated from the deploy job above: it runs
+  # on its own runner, only ever authenticates to the shared project, and cannot
+  # affect the deploy's gcloud credentials, its result, or its timing.
+  #
+  # `always()` means this runs even if the deploy job fails, and no step here
+  # can fail the overall run (every step is continue-on-error, and the called
+  # workflow skips cleanly when the shared secrets are absent). Callers do not
+  # need any changes: the shared push activates purely by setting the four
+  # GCP_*_SHARED secrets on the repo.
+  push-to-shared-registry:
+    name: Push Image to Shared Registry
+    needs: deploy
+    if: ${{ always() && inputs.deploy_type != 'release-only' }}
+    uses: WanAware/.github/.github/workflows/shared-registry-push.yaml@prod
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      runner: ${{ inputs.runner }}
+      environment_name: ${{ inputs.environment_name }}
+      image_path: ${{ inputs.image_path }}
+      docker_context: ${{ inputs.docker_context }}
+      dockerfile_path: ${{ inputs.dockerfile_path }}
+    secrets:
+      GCP_SERVICE_ACCOUNT_SHARED: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
+      GCP_PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
+      GCP_REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
+      GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}

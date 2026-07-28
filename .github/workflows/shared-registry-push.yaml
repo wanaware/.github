@@ -144,14 +144,29 @@ jobs:
           build-args: |
             GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
 
-      # Surface a soft failure in the run summary. Because the push is
-      # best-effort, without this a stale shared registry would go unnoticed.
+      # Surface the result. Because the push is best-effort, the job goes green
+      # even when it fails, so without an explicit warning a stale shared
+      # registry would go unnoticed. `::warning::` shows an annotation on the
+      # run page itself, not just in the summary tab.
       - name: Report shared push result
         if: ${{ always() && steps.config.outputs.configured == 'true' }}
         continue-on-error: true
+        env:
+          REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
+          PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
+          IMAGE_PATH: ${{ inputs.image_path }}
+          PUSH_OUTCOME: ${{ steps.build_push.outcome }}
         run: |
-          if [[ "${{ steps.build_push.outcome }}" == "success" ]]; then
-            echo "Pushed to shared registry: ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          IMAGE="$REGISTRY_SHARED/$PROJECT_SHARED/$IMAGE_PATH:latest"
+          if [[ "$PUSH_OUTCOME" == "success" ]]; then
+            echo "Pushed to shared registry: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "WARNING: shared registry push did not succeed (outcome: ${{ steps.build_push.outcome }}). The service deploy was not affected; the shared image may now be stale." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Shared registry push failed::Could not push $IMAGE (outcome: $PUSH_OUTCOME). The service deploy was NOT affected, but the shared image may now be stale."
+            {
+              echo "### Shared registry push failed"
+              echo ""
+              echo "Could not push \`$IMAGE\` (outcome: \`$PUSH_OUTCOME\`)."
+              echo ""
+              echo "The service deploy was **not** affected. The shared image may now be stale."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi

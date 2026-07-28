@@ -499,9 +499,7 @@ jobs:
     name: Push Image to Shared Registry
     needs: deploy
     if: ${{ always() && inputs.deploy_type != 'release-only' }}
-    # TEMPORARY: pinned to the feature branch for end-to-end testing.
-    # MUST be reverted to @prod before merge.
-    uses: WanAware/.github/.github/workflows/shared-registry-push.yaml@feat/shared-registry-push-workflow
+    uses: WanAware/.github/.github/workflows/shared-registry-push.yaml@prod
     permissions:
       contents: read
       id-token: write

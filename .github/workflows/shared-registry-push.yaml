@@ -1,0 +1,172 @@
+name: Push Image to Shared Registry
+
+# Builds the service image and pushes it to the shared GCP project so the
+# wanaware-operator can pull and run it.
+#
+# This workflow is deliberately standalone and completely isolated from
+# deployment.yaml's build/deploy path:
+#   - It runs as its own job on its own runner, so the gcloud credentials and
+#     docker credential helper it sets up cannot leak into the deploy job.
+#   - It only ever authenticates to the shared project. It never touches the
+#     WanAware registry, so it cannot disturb any existing auth.
+#   - Every step is continue-on-error and the job itself is continue-on-error
+#     at the call site, so a failure here can never fail a service's deploy.
+#
+# It rebuilds from source rather than retagging the deploy job's image because
+# that image is only loaded into the deploy runner's local docker daemon, and
+# pulling it instead would require authenticating to the WanAware registry here.
+# The build is identical (same context, Dockerfile and build-args), so the
+# resulting image matches what deployment.yaml ships.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Escape-hatch override for runs-on. Leave empty (default) to auto-select the in-house ARC scale set for the target env (arc-shared-dev|stage|prod, derived from environment_name).'
+        required: false
+        default: ''
+        type: string
+      environment_name:
+        description: 'Deployment environment (development, staging, production)'
+        required: false
+        default: 'development'
+        type: string
+      image_path:
+        description: 'Image path within the registry (e.g. fleet-manager/fleet-manager)'
+        required: false
+        default: ''
+        type: string
+      docker_context:
+        description: 'Docker build context path'
+        required: false
+        default: '.'
+        type: string
+      dockerfile_path:
+        description: 'Path to the Dockerfile'
+        required: false
+        default: 'Dockerfile'
+        type: string
+    secrets:
+      GCP_SERVICE_ACCOUNT_SHARED:
+        required: false
+        description: 'Shared-project GCP service account email to impersonate via WIF.'
+      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
+        required: false
+        description: 'Full WIF provider resource name for the shared project.'
+      GCP_PROJECT_SHARED:
+        required: false
+        description: 'Shared GCP project ID that receives the image.'
+      GCP_REGISTRY_SHARED:
+        required: false
+        description: 'Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev).'
+      GH_ACCESS_TOKEN:
+        required: false
+        description: 'Token passed as a build-arg for pulling private Go modules.'
+
+jobs:
+  push-to-shared:
+    name: Build and Push to Shared Registry
+    # Belt-and-braces: every step is already continue-on-error, and this makes
+    # the whole job non-fatal too, so nothing here can ever turn a service's
+    # deploy run red.
+    continue-on-error: true
+    runs-on: >-
+      ${{ inputs.runner != '' && inputs.runner
+       || inputs.environment_name == 'production' && 'arc-shared-prod'
+       || inputs.environment_name == 'staging' && 'arc-shared-stage'
+       || 'arc-shared-dev' }}
+
+    environment: ${{ inputs.environment_name }}
+
+    # id-token: write is required for WIF. contents: read is enough here since
+    # this workflow only builds and pushes, it never creates releases.
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      # Skip everything cleanly when the shared secrets are not configured, so
+      # repos that have not onboarded do not show failed steps on every run.
+      - name: Check shared registry configuration
+        id: config
+        continue-on-error: true
+        # Secrets are passed through env rather than interpolated into the
+        # script so their values are never expanded into the shell source.
+        env:
+          PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
+          REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
+          SA_SHARED: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+          WIF_SHARED: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
+        run: |
+          if [[ -n "$PROJECT_SHARED" && -n "$REGISTRY_SHARED" \
+             && -n "$SA_SHARED" && -n "$WIF_SHARED" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Shared registry secrets not configured; skipping shared push."
+          fi
+
+      - name: Checkout code
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        uses: actions/checkout@v3
+
+      - name: Authenticate with GCP Shared Account
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+
+      - name: Set up gcloud for GCP Shared Account
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_SHARED }}
+
+      - name: Configure Docker for GCP Shared Registry
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY_SHARED }}
+
+      - name: Build and push image to GCP Shared Registry
+        id: build_push
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        uses: docker/build-push-action@v4
+        with:
+          context: ${{ inputs.docker_context }}
+          file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
+          push: true
+          tags: ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
+          build-args: |
+            GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+
+      # Surface the result. Because the push is best-effort, the job goes green
+      # even when it fails, so without an explicit warning a stale shared
+      # registry would go unnoticed. `::warning::` shows an annotation on the
+      # run page itself, not just in the summary tab.
+      - name: Report shared push result
+        if: ${{ always() && steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        env:
+          REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
+          PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
+          IMAGE_PATH: ${{ inputs.image_path }}
+          PUSH_OUTCOME: ${{ steps.build_push.outcome }}
+        run: |
+          IMAGE="$REGISTRY_SHARED/$PROJECT_SHARED/$IMAGE_PATH:latest"
+          if [[ "$PUSH_OUTCOME" == "success" ]]; then
+            echo "Pushed to shared registry: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=Shared registry push failed::Could not push $IMAGE (outcome: $PUSH_OUTCOME). The service deploy was NOT affected, but the shared image may now be stale."
+            {
+              echo "### Shared registry push failed"
+              echo ""
+              echo "Could not push \`$IMAGE\` (outcome: \`$PUSH_OUTCOME\`)."
+              echo ""
+              echo "The service deploy was **not** affected. The shared image may now be stale."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

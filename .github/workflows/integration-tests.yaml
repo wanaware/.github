@@ -414,6 +414,18 @@ jobs:
           name: env-files
           path: .
 
+      - name: Load environment variables from service .env files
+        if: ${{ inputs.multi_service != '' }}
+        run: |
+          for env_file in $(find . -name '.env' -type f); do
+            while IFS= read -r line || [ -n "$line" ]; do
+              [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+              if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                echo "$line" >> $GITHUB_ENV
+              fi
+            done < "$env_file"
+          done
+
       - name: Download Go modules for all services
         if: ${{ inputs.multi_service != '' }}
         run: |

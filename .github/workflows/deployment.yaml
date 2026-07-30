@@ -67,6 +67,11 @@ on:
         required: false
         default: './scripts/generate-documentation.go'
         type: string
+      docs_working_directory:
+        description: 'Working directory for docs generation steps (defaults to repo root; set to the service subdirectory for monorepo callers)'
+        required: false
+        default: '.'
+        type: string
       caller_repository:
         description: 'Caller repository for artifact download (e.g. wanaware/function-integrator)'
         required: false
@@ -370,12 +375,14 @@ jobs:
       - name: Generate documentation
         if: ${{ inputs.generate_docs }}
         run: go run ${{ inputs.docs_script }}
+        working-directory: ${{ inputs.docs_working_directory }}
         env:
           GOPRIVATE: github.com/wanaware/*
 
       - name: Generate GraphQL docs
         if: ${{ inputs.generate_docs }}
         run: graphdoc -s ./generated-schema.graphql -o output-folder -f
+        working-directory: ${{ inputs.docs_working_directory }}
 
       # --- GitHub release + GCS history ---
       - name: Mark deployment success
@@ -478,7 +485,7 @@ jobs:
 
       - name: Upload docs to GCS
         if: ${{ inputs.generate_docs }}
-        run: gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
+        run: gcloud storage cp -r ${{ inputs.docs_working_directory }}/output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
 
       - name: Upload release files to GCS
         if: ${{ inputs.upload_release_files && !inputs.generate_docs }}

@@ -131,6 +131,12 @@ jobs:
         continue-on-error: true
         run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY_SHARED }}
 
+      - name: Compute timestamp tag
+        id: timestamp
+        if: ${{ steps.config.outputs.configured == 'true' }}
+        continue-on-error: true
+        run: echo "value=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image to GCP Shared Registry
         id: build_push
         if: ${{ steps.config.outputs.configured == 'true' }}
@@ -140,7 +146,9 @@ jobs:
           context: ${{ inputs.docker_context }}
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: true
-          tags: ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/${{ inputs.image_path }}:latest
+          tags: |
+            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:latest
+            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
           build-args: |
             GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
 
@@ -155,17 +163,18 @@ jobs:
           REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
           PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
           IMAGE_PATH: ${{ inputs.image_path }}
+          TIMESTAMP_TAG: ${{ steps.timestamp.outputs.value }}
           PUSH_OUTCOME: ${{ steps.build_push.outcome }}
         run: |
-          IMAGE="$REGISTRY_SHARED/$PROJECT_SHARED/$IMAGE_PATH:latest"
+          BASE="$REGISTRY_SHARED/$PROJECT_SHARED/$IMAGE_PATH"
           if [[ "$PUSH_OUTCOME" == "success" ]]; then
-            echo "Pushed to shared registry: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+            echo "Pushed to shared registry: $BASE:latest, $BASE:$TIMESTAMP_TAG" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning title=Shared registry push failed::Could not push $IMAGE (outcome: $PUSH_OUTCOME). The service deploy was NOT affected, but the shared image may now be stale."
+            echo "::warning title=Shared registry push failed::Could not push $BASE:latest / $BASE:$TIMESTAMP_TAG (outcome: $PUSH_OUTCOME). The service deploy was NOT affected, but the shared image may now be stale."
             {
               echo "### Shared registry push failed"
               echo ""
-              echo "Could not push \`$IMAGE\` (outcome: \`$PUSH_OUTCOME\`)."
+              echo "Could not push \`$BASE:latest\` / \`$BASE:$TIMESTAMP_TAG\` (outcome: \`$PUSH_OUTCOME\`)."
               echo ""
               echo "The service deploy was **not** affected. The shared image may now be stale."
             } >> "$GITHUB_STEP_SUMMARY"

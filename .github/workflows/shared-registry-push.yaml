@@ -166,7 +166,7 @@ jobs:
           TIMESTAMP_TAG: ${{ steps.timestamp.outputs.value }}
           PUSH_OUTCOME: ${{ steps.build_push.outcome }}
         run: |
-          BASE="$REGISTRY_SHARED/$PROJECT_SHARED/$IMAGE_PATH"
+          BASE="$REGISTRY_SHARED/$PROJECT_SHARED/wanaware-platform/$IMAGE_PATH"
           if [[ "$PUSH_OUTCOME" == "success" ]]; then
             echo "Pushed to shared registry: $BASE:latest, $BASE:$TIMESTAMP_TAG" >> "$GITHUB_STEP_SUMMARY"
           else

@@ -197,7 +197,7 @@ jobs:
       - name: Load environment variables from service .env files
         if: ${{ inputs.multi_service != '' }}
         run: |
-          for env_file in $(find services -name '.env' -type f); do
+          find services -name '.env' -type f -print0 | while IFS= read -r -d '' env_file; do
             while IFS= read -r line || [ -n "$line" ]; do
               [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
               if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
@@ -442,12 +442,14 @@ jobs:
       - name: Start services from manifest
         if: ${{ inputs.multi_service != '' }}
         run: |
-          chmod +x ${{ inputs.multi_service }}
-          ${{ inputs.multi_service }}
+          chmod +x "$MULTI_SERVICE"
+          "$MULTI_SERVICE"
+        env:
+          MULTI_SERVICE: ${{ inputs.multi_service }}
 
       # --- Single-server mode ---
       - name: Build Go server
-        if: ${{ inputs.multi_service == '' }}
+        if: ${{ inputs.multi_service == '' && inputs.server_cmd != '' }}
         run: go build -o /tmp/server-binary ${{ inputs.server_cmd }}
         working-directory: ${{ inputs.working_directory }}
         env:
@@ -684,7 +686,7 @@ jobs:
         if: ${{ always() && inputs.multi_service != '' }}
         run: |
           if [ -f /tmp/service-pids.txt ]; then
-            awk '{print $2}' /tmp/service-pids.txt | xargs kill 2>/dev/null || true
+            awk '{print $NF}' /tmp/service-pids.txt | xargs -r kill 2>/dev/null || true
           fi
 
       - name: Check for Failed Integration Tests

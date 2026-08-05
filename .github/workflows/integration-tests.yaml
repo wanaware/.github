@@ -167,6 +167,13 @@ jobs:
           name: env-file
           path: .
 
+      - name: Copy artifact files to working directory
+        if: ${{ inputs.working_directory != '.' }}
+        run: |
+          cp -f .env ${{ inputs.working_directory }}/.env 2>/dev/null || true
+          cp -f nats-nkey.seed ${{ inputs.working_directory }}/nats-nkey.seed 2>/dev/null || true
+          cp -f ca.crt ${{ inputs.working_directory }}/ca.crt 2>/dev/null || true
+
       - name: Load environment variables from .env
         run: |
           while IFS= read -r line || [ -n "$line" ]; do
@@ -403,8 +410,8 @@ jobs:
           GOPRIVATE: github.com/wanaware
 
       - name: Start Go server
+        working-directory: ${{ inputs.working_directory }}
         run: |
-          chmod +x ${{ inputs.wait_for_it_path }}
           # Write extra server env vars to a temp file and source it
           if [ -n "$SERVER_ENV" ]; then
             echo "$SERVER_ENV" > /tmp/server_extra.env
@@ -458,7 +465,7 @@ jobs:
             wait_time=$((wait_time * 2))
           done
           echo "API server did not become reachable in time"
-          cat server.log
+          cat ${{ inputs.working_directory }}/server.log || true
           exit 1
 
       # --- Newman tests ---
@@ -574,6 +581,7 @@ jobs:
         id: custom_runner
         continue-on-error: true
         run: |
+          chmod +x ${{ inputs.wait_for_it_path }}
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           chmod +x ${{ inputs.test_runner_script }}
           ${{ inputs.test_runner_script }} "$ACCESS_TOKEN" "$FUNCTION_IDS" "$CUSTOMER_ID"
@@ -582,6 +590,7 @@ jobs:
       - name: Run Integration Tests (newman)
         if: ${{ inputs.test_runner_script == '' }}
         run: |
+          chmod +x ${{ inputs.wait_for_it_path }}
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           echo "NEWMAN_FAILED=false" >> $GITHUB_ENV
 

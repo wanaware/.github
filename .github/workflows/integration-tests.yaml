@@ -14,8 +14,9 @@ on:
         default: "1.24.6"
         type: string
       server_cmd:
-        description: "Go main file to run the server (e.g. ./cmd/fleet-manager/main.go)"
-        required: true
+        description: "Go main file to run the server (e.g. ./cmd/fleet-manager/main.go). Not required when using multi_service."
+        required: false
+        default: ""
         type: string
       wait_for_it_path:
         description: "Path to wait-for-it.sh script"
@@ -112,6 +113,11 @@ on:
         required: false
         default: "."
         type: string
+      multi_service:
+        description: "Path to a script that builds and starts multiple services (e.g. ./integration-tests/scripts/start-services.sh). When set, replaces single-server build/start. PIDs must be written to /tmp/service-pids.txt for cleanup."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   integration-test:
@@ -139,6 +145,7 @@ jobs:
       # the final attempt is not, so genuine failures still fail the job.
       - name: Download .env artifact (attempt 1)
         id: dl1
+        if: ${{ inputs.multi_service == '' }}
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -146,11 +153,11 @@ jobs:
           path: .
 
       - name: Wait before .env retry 2
-        if: ${{ steps.dl1.outcome == 'failure' }}
+        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' }}
         run: sleep 15
       - name: Download .env artifact (attempt 2)
         id: dl2
-        if: ${{ steps.dl1.outcome == 'failure' }}
+        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' }}
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -158,16 +165,17 @@ jobs:
           path: .
 
       - name: Wait before .env retry 3
-        if: ${{ steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
+        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
         run: sleep 30
       - name: Download .env artifact (attempt 3, final)
-        if: ${{ steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
+        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
         uses: actions/download-artifact@v4
         with:
           name: env-file
           path: .
 
       - name: Load environment variables from .env
+        if: ${{ inputs.multi_service == '' }}
         run: |
           while IFS= read -r line || [ -n "$line" ]; do
             # Skip empty lines and comments
@@ -177,6 +185,26 @@ jobs:
               echo "$line" >> $GITHUB_ENV
             fi
           done < .env
+
+      # --- Multi-service: download and load env files ---
+      - name: Download env-files artifact
+        if: ${{ inputs.multi_service != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: env-files
+          path: services/
+
+      - name: Load environment variables from service .env files
+        if: ${{ inputs.multi_service != '' }}
+        run: |
+          find services -name '.env' -type f -print0 | while IFS= read -r -d '' env_file; do
+            while IFS= read -r line || [ -n "$line" ]; do
+              [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+              if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                echo "$line" >> $GITHUB_ENV
+              fi
+            done < "$env_file"
+          done
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -313,12 +341,14 @@ jobs:
           GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
 
       - name: Download Go Modules
+        if: ${{ inputs.multi_service == '' }}
         run: go mod download
         working-directory: ${{ inputs.working_directory }}
         env:
           GOPRIVATE: github.com/wanaware
 
       - name: Run Go Mod Tidy
+        if: ${{ inputs.multi_service == '' }}
         run: go mod tidy
         working-directory: ${{ inputs.working_directory }}
         env:
@@ -396,13 +426,37 @@ jobs:
           service_account: ${{ secrets.CI_APP_RUNTIME_SA_EMAIL }}
           create_credentials_file: true
 
+      # --- Multi-service manifest mode ---
+      - name: Download Go modules for all services
+        if: ${{ inputs.multi_service != '' }}
+        run: |
+          for svc_dir in services/*/; do
+            if [ -f "$svc_dir/go.mod" ]; then
+              echo "Downloading modules for $svc_dir..."
+              (cd "$svc_dir" && go mod download)
+            fi
+          done
+        env:
+          GOPRIVATE: github.com/wanaware
+
+      - name: Start services from manifest
+        if: ${{ inputs.multi_service != '' }}
+        run: |
+          chmod +x "$MULTI_SERVICE"
+          "$MULTI_SERVICE"
+        env:
+          MULTI_SERVICE: ${{ inputs.multi_service }}
+
+      # --- Single-server mode ---
       - name: Build Go server
+        if: ${{ inputs.multi_service == '' && inputs.server_cmd != '' }}
         run: go build -o /tmp/server-binary ${{ inputs.server_cmd }}
         working-directory: ${{ inputs.working_directory }}
         env:
           GOPRIVATE: github.com/wanaware
 
       - name: Start Go server
+        if: ${{ inputs.multi_service == '' }}
         run: |
           chmod +x ${{ inputs.wait_for_it_path }}
           # Write extra server env vars to a temp file and source it
@@ -445,6 +499,7 @@ jobs:
           NEW_RELIC_APP_NAME: ${{ secrets.NEW_RELIC_APP_NAME }}
 
       - name: Wait for API server to be reachable
+        if: ${{ inputs.multi_service == '' }}
         run: |
           wait_time=5
           max_attempts=6
@@ -622,10 +677,17 @@ jobs:
       - name: Close App Server & DB tunnel
         if: always()
         run: |
-          [ -n "$API_PID" ] && kill $API_PID || true
-          [ -n "$PORT_FORWARD_PID" ] && kill $PORT_FORWARD_PID || true
-          [ -n "$NATS_SERVER_PID" ] && kill $NATS_SERVER_PID || true
-          [ -n "$NATS_PORT_FORWARD_PID" ] && kill $NATS_PORT_FORWARD_PID || true
+          [ -n "${API_PID:-}" ] && kill $API_PID || true
+          [ -n "${PORT_FORWARD_PID:-}" ] && kill $PORT_FORWARD_PID || true
+          [ -n "${NATS_SERVER_PID:-}" ] && kill $NATS_SERVER_PID || true
+          [ -n "${NATS_PORT_FORWARD_PID:-}" ] && kill $NATS_PORT_FORWARD_PID || true
+
+      - name: Stop services from manifest
+        if: ${{ always() && inputs.multi_service != '' }}
+        run: |
+          if [ -f /tmp/service-pids.txt ]; then
+            awk '{print $NF}' /tmp/service-pids.txt | xargs -r kill 2>/dev/null || true
+          fi
 
       - name: Check for Failed Integration Tests
         run: |

@@ -6,84 +6,89 @@ on:
       runner:
         description: 'Escape-hatch override for runs-on. Leave empty (default) to auto-select the in-house ARC scale set for the target env (arc-shared-dev|stage|prod, derived from environment_name). Set to "ubuntu-latest" or a specific label only to opt a job out of ARC.'
         required: false
-        default: ''
+        default: ""
         type: string
       environment_name:
-        description: 'Deployment environment (development, staging, production)'
+        description: "Deployment environment (development, staging, production)"
         required: false
-        default: 'development'
+        default: "development"
         type: string
       service_name:
-        description: 'Service name (used in release tags and GCS paths)'
+        description: "Service name (used in release tags and GCS paths)"
         required: true
         type: string
       image_path:
-        description: 'Image path within the registry (e.g. fleet-manager/fleet-manager)'
+        description: "Image path within the registry (e.g. fleet-manager/fleet-manager)"
         required: false
-        default: ''
+        default: ""
         type: string
       deploy_type:
-        description: 'Deployment target: gke | cloudrun-service | cloudrun-job | build-only | release-only'
+        description: "Deployment target: gke | cloudrun-service | cloudrun-job | build-only | release-only"
         required: false
-        default: 'gke'
+        default: "gke"
         type: string
       deployment_name:
-        description: 'K8s deployment name for kubectl rollout restart (required if deploy_type=gke)'
+        description: "K8s deployment name for kubectl rollout restart (required if deploy_type=gke)"
         required: false
-        default: ''
+        default: ""
         type: string
       namespace:
-        description: 'K8s namespace (required if deploy_type=gke)'
+        description: "K8s namespace (required if deploy_type=gke)"
         required: false
-        default: ''
+        default: ""
         type: string
       cloudrun_name:
-        description: 'Cloud Run service or job name (required if deploy_type != gke)'
+        description: "Cloud Run service or job name (required if deploy_type != gke)"
         required: false
-        default: ''
+        default: ""
         type: string
       docker_context:
-        description: 'Docker build context path'
+        description: "Docker build context path"
         required: false
-        default: '.'
+        default: "."
         type: string
       dockerfile_path:
-        description: 'Path to the Dockerfile'
+        description: "Path to the Dockerfile"
         required: false
-        default: 'Dockerfile'
+        default: "Dockerfile"
         type: string
       generate_docs:
-        description: 'Run graphdoc generation and upload to GCS'
+        description: "Run graphdoc generation and upload to GCS"
         required: false
         default: false
         type: boolean
       upload_release_files:
-        description: 'Upload release files (output-folder) to GCS without graphdoc (for release-only deployments)'
+        description: "Upload release files (output-folder) to GCS without graphdoc (for release-only deployments)"
         required: false
         default: false
         type: boolean
       docs_script:
-        description: 'Path to Go documentation generation script'
+        description: "Path to Go documentation generation script"
         required: false
-        default: './scripts/generate-documentation.go'
+        default: "./scripts/generate-documentation.go"
+        type: string
+      docs_working_directory:
+        description: "Working directory for docs generation steps (defaults to repo root; set to the service subdirectory for monorepo callers)"
+        required: false
+        default: "."
         type: string
       caller_repository:
-        description: 'Caller repository for artifact download (e.g. wanaware/function-integrator)'
+        description: "Caller repository for artifact download (e.g. wanaware/function-integrator)"
         required: false
-        default: ''
+        default: ""
         type: string
       caller_run_id:
-        description: 'Caller workflow run ID for artifact download'
+        description: "Caller workflow run ID for artifact download"
         required: false
-        default: ''
+        default: ""
         type: string
     secrets:
       GCP_SERVICE_ACCOUNT:
         required: true
-        description: 'GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com).'
+        description: "GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com)."
       GCP_WORKLOAD_IDENTITY_PROVIDER:
         required: true
-        description: 'Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider).'
+        description: "Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider)."
       GCP_PROJECT:
         required: false
       GCP_REGISTRY:
@@ -102,16 +107,16 @@ on:
       # the shared push is skipped and nothing else changes.
       GCP_SERVICE_ACCOUNT_SHARED:
         required: false
-        description: 'Shared-project GCP service account email to impersonate via WIF.'
+        description: "Shared-project GCP service account email to impersonate via WIF."
       GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
         required: false
-        description: 'Full WIF provider resource name for the shared project.'
+        description: "Full WIF provider resource name for the shared project."
       GCP_PROJECT_SHARED:
         required: false
-        description: 'Shared GCP project ID that receives the image.'
+        description: "Shared GCP project ID that receives the image."
       GCP_REGISTRY_SHARED:
         required: false
-        description: 'Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev).'
+        description: "Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev)."
 
 jobs:
   deploy:
@@ -234,12 +239,12 @@ jobs:
         if: ${{ inputs.deploy_type != 'release-only' }}
         uses: aquasecurity/trivy-action@0.35.0
         with:
-          scan-type: 'image'
+          scan-type: "image"
           image-ref: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           ignore-unfixed: true
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
 
       - name: Push Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
@@ -370,12 +375,14 @@ jobs:
       - name: Generate documentation
         if: ${{ inputs.generate_docs }}
         run: go run ${{ inputs.docs_script }}
+        working-directory: ${{ inputs.docs_working_directory }}
         env:
           GOPRIVATE: github.com/wanaware/*
 
       - name: Generate GraphQL docs
         if: ${{ inputs.generate_docs }}
         run: graphdoc -s ./generated-schema.graphql -o output-folder -f
+        working-directory: ${{ inputs.docs_working_directory }}
 
       # --- GitHub release + GCS history ---
       - name: Mark deployment success
@@ -478,7 +485,9 @@ jobs:
 
       - name: Upload docs to GCS
         if: ${{ inputs.generate_docs }}
-        run: gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
+        run: gcloud storage cp -r "$DOCS_WORKING_DIRECTORY"/output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
+        env:
+          DOCS_WORKING_DIRECTORY: ${{ inputs.docs_working_directory }}
 
       - name: Upload release files to GCS
         if: ${{ inputs.upload_release_files && !inputs.generate_docs }}

@@ -58,6 +58,21 @@ on:
         required: false
         default: true
         type: boolean
+      use_vault:
+        description: "Mint a ServiceAccount token so the service under test can authenticate to the in-cluster Vault. Requires GKE credentials. Sets VAULT_CACERT and VAULT_TOKEN_PATH; the caller still supplies VAULT_ADDR and VAULT_ROLE."
+        required: false
+        default: false
+        type: boolean
+      vault_ksa:
+        description: "ServiceAccount to mint the Vault login token as (e.g. user-authentication-service-ksa). Required when use_vault=true."
+        required: false
+        default: ""
+        type: string
+      vault_ksa_namespace:
+        description: "Namespace of vault_ksa. Defaults to vault_ksa with the -ksa suffix stripped, which matches the repo-wide <service>/<service>-ksa convention."
+        required: false
+        default: ""
+        type: string
       server_env:
         description: "Multiline env vars to export before starting the Go server (KEY=VALUE format)"
         required: false
@@ -332,6 +347,64 @@ jobs:
           done
           echo "NATS server did not become reachable in time"
           exit 1
+
+      # --- Optional: Vault ---
+      # Unlike NATS and Cloud SQL, Vault needs NO port-forward: runners are ARC
+      # pods inside the cluster, so https://vault.vault.svc:8200 resolves and is
+      # reachable directly (no NetworkPolicies restrict it). The caller's
+      # VAULT_ADDR is therefore already correct as-is.
+      #
+      # What is missing on a runner is the credential. common/vault authenticates
+      # ONLY via Kubernetes auth (kubeauth.NewKubernetesAuth), reading a projected
+      # ServiceAccount token from a file. A runner pod has no projected token for
+      # the service under test, so the login has nothing to present and the client
+      # fails to build. We mint that token here with `kubectl create token` against
+      # the service's real KSA, which is exactly what Vault's role is bound to.
+      #
+      # The token is audience-scoped to "vault", matching the projected token
+      # volume in modules/kubernetes and the role's bound audience. It cannot be
+      # replayed against the Kubernetes API server.
+      - name: Get GKE credentials for Vault
+        if: ${{ inputs.use_vault }}
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.CLUSTER_NAME }}
+          location: ${{ secrets.CLUSTER_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Mint Vault ServiceAccount token
+        if: ${{ inputs.use_vault }}
+        env:
+          VAULT_KSA: ${{ inputs.vault_ksa }}
+          VAULT_KSA_NAMESPACE: ${{ inputs.vault_ksa_namespace }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$VAULT_KSA" ]; then
+            echo "use_vault=true requires vault_ksa"; exit 1
+          fi
+          # Convention: KSA <service>-ksa lives in namespace <service>.
+          ns="${VAULT_KSA_NAMESPACE:-${VAULT_KSA%-ksa}}"
+
+          kubectl get secret vault-tls -n vault -o jsonpath='{.data.ca\.crt}' \
+            | base64 -d > /tmp/vault-ca.crt
+          if [ ! -s /tmp/vault-ca.crt ]; then
+            echo "Vault CA bundle came back empty"; exit 1
+          fi
+
+          # Duration must outlast the job: common/vault's renewal goroutine
+          # re-reads this file, and a static file never rotates. Failing the job
+          # is better than a token expiring mid-test and surfacing as an
+          # unrelated 502 from whichever call needed a secret next.
+          kubectl create token "$VAULT_KSA" \
+            --namespace "$ns" \
+            --audience vault \
+            --duration 7200s > /tmp/vault-token
+          chmod 600 /tmp/vault-token
+
+          echo "VAULT_CACERT=/tmp/vault-ca.crt"    >> $GITHUB_ENV
+          echo "VAULT_TOKEN_PATH=/tmp/vault-token" >> $GITHUB_ENV
+          echo "Minted Vault token for $ns/$VAULT_KSA"
 
       # --- Go private module access ---
       - name: Set up Go environment for private repo access
@@ -673,6 +746,20 @@ jobs:
             FUNCTION_IDS_STRING=$(echo "$FUNCTION_IDS" | jq -r '. | join(",")')
             python ${{ inputs.post_test_cleanup_script }} "$ACCESS_TOKEN" "${{ inputs.post_test_cleanup_args }}" "$FUNCTION_IDS_STRING"
           fi
+
+      # The server writes startup diagnostics to server.log. Without this the log
+      # is discarded with the runner, so a config problem at boot (a dependency
+      # client that failed to initialise, say) is invisible and only shows up as
+      # an unexplained error from whichever request needed it later.
+      - name: Dump server log on failure
+        if: failure()
+        run: |
+          for f in server.log services/*/server.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"
+            tail -n 200 "$f"
+            echo "::endgroup::"
+          done
 
       - name: Close App Server & DB tunnel
         if: always()

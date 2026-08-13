@@ -406,28 +406,6 @@ jobs:
           echo "VAULT_TOKEN_PATH=/tmp/vault-token" >> $GITHUB_ENV
           echo "Minted Vault token for $ns/$VAULT_KSA"
 
-      # Fail here, loudly, rather than letting the service start with a nil Vault
-      # client and surface it later as an opaque downstream error.
-      - name: Verify Vault login
-        if: ${{ inputs.use_vault }}
-        run: |
-          set -euo pipefail
-          addr="${VAULT_ADDR:-https://vault.vault.svc:8200}"
-          role="${VAULT_ROLE:?VAULT_ROLE must be set when use_vault=true}"
-
-          code=$(curl --cacert /tmp/vault-ca.crt -s -o /tmp/vault-login.json -w '%{http_code}' \
-            --max-time 15 -X POST \
-            --data "{\"role\":\"$role\",\"jwt\":\"$(cat /tmp/vault-token)\"}" \
-            "$addr/v1/auth/kubernetes/login")
-
-          if [ "$code" != "200" ]; then
-            echo "Vault login failed for role '$role' at $addr (HTTP $code)"
-            # Response carries Vault's error array, never a secret value.
-            cat /tmp/vault-login.json
-            exit 1
-          fi
-          echo "Vault login OK for role '$role'"
-
       # --- Go private module access ---
       - name: Set up Go environment for private repo access
         run: |

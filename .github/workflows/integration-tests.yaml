@@ -78,11 +78,6 @@ on:
         required: false
         default: ""
         type: string
-      required_env:
-        description: "Newline-separated names of env vars this service needs at test time. Each must already be present in the runner environment, which External Secrets Operator fills from Keeper (wanaware-infrastructure: modules/arc, arc_runner_env_secret_name). Missing names are reported together and fail the job up front, rather than one at a time through a config helper that panics on the first gap."
-        required: false
-        default: ""
-        type: string
       access_token_script:
         description: "Path to Python script that fetches access tokens"
         required: false
@@ -168,23 +163,40 @@ jobs:
       #     which the pod environment never touches. Use shell syntax.
       #   * A step-level `env:` block overrides the inherited value. Listing a key
       #     there with an empty expression blanks it; omit the key instead.
-      - name: Verify required env is present
-        if: ${{ inputs.required_env != '' }}
+      # No per-repo list of names to maintain: the Keeper folder is the source of
+      # truth for WHAT a service receives, so enumerating it here would just be a
+      # second copy to keep in sync.
+      #
+      # This checks only the handful the workflow needs to build its OWN plumbing,
+      # derived from the use_* inputs. Those are the ones that fail misleadingly:
+      # an empty DB_PORT is not an error, it is a tunnel to the wrong port that
+      # surfaces much later as a connection refused looking like a network fault.
+      #
+      # A service's own config is deliberately NOT checked. Missing keys there
+      # panic the server on startup naming the key, which is already a clear
+      # failure that points at the right place.
+      - name: Verify test rig env
         env:
-          REQUIRED_ENV: ${{ inputs.required_env }}
+          NEEDS_DB: ${{ inputs.use_cloud_sql }}
+          NEEDS_NATS: ${{ inputs.use_nats || inputs.use_nats_port_forward }}
         run: |
           set -euo pipefail
           MISSING=()
-          while read -r KEY; do
-            [[ -z "$KEY" ]] && continue
-            [[ -z "${!KEY:-}" ]] && MISSING+=("$KEY")
-          done <<< "$REQUIRED_ENV"
+          if [[ "$NEEDS_DB" == "true" ]]; then
+            for KEY in DB_PORT DB_USER DB_NAME DB_PASSWORD; do
+              if [[ -z "${!KEY:-}" ]]; then MISSING+=("$KEY"); fi
+            done
+          fi
+          if [[ "$NEEDS_NATS" == "true" ]]; then
+            if [[ -z "${NATS_PORT:-}" ]]; then MISSING+=("NATS_PORT"); fi
+          fi
           if ((${#MISSING[@]})); then
-            echo "::error::Not set in the runner environment: ${MISSING[*]}"
+            echo "::error::Missing from the runner environment: ${MISSING[*]}"
+            echo "::error::These build the test rig itself, so an empty value misroutes instead of erroring."
             echo "::error::Check: kubectl -n arc-runners get externalsecret integration-tests-env"
             exit 1
           fi
-          echo "All ${REQUIRED_ENV//$'\n'/ } present."
+          echo "Test rig env present."
 
       # NATS client auth takes an nkey seed from a *file*, but the value arrives
       # from Keeper as an env var. Write it to the path callers already point

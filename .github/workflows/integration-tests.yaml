@@ -74,7 +74,12 @@ on:
         default: ""
         type: string
       server_env:
-        description: "Multiline env vars to export before starting the Go server (KEY=VALUE format)"
+        description: "Multiline env vars to export before starting the Go server (KEY=VALUE format). Use it for values that are specific to the test rig (local sidecar hosts and ports, ENVIRONMENT=IntegrationTest), never for secrets — those arrive from Keeper in the runner environment."
+        required: false
+        default: ""
+        type: string
+      required_env:
+        description: "Newline-separated names of env vars this service needs at test time. Each must already be present in the runner environment, which External Secrets Operator fills from Keeper (wanaware-infrastructure: modules/arc, arc_runner_env_secret_name). Missing names are reported together and fail the job up front, rather than one at a time through a config helper that panics on the first gap."
         required: false
         default: ""
         type: string
@@ -150,76 +155,51 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
-      # download-artifact@v4 resolves the artifact through the run-scoped Artifacts
-      # v4 API (authenticated by the injected runtime token, so no `actions:`
-      # permission is needed). On ephemeral ARC pods the results service is
-      # occasionally not yet consistent for the run when the pod starts, returning
-      # a *non-retryable* "404 workflow run not found" that fails the whole job.
-      # The window closes within seconds, so re-run the action a few times with a
-      # gap. Each attempt is continue-on-error and gated on the previous outcome;
-      # the final attempt is not, so genuine failures still fail the job.
-      - name: Download .env artifact (attempt 1)
-        id: dl1
-        if: ${{ inputs.multi_service == '' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: .
-
-      - name: Wait before .env retry 2
-        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' }}
-        run: sleep 15
-      - name: Download .env artifact (attempt 2)
-        id: dl2
-        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: .
-
-      - name: Wait before .env retry 3
-        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
-        run: sleep 30
-      - name: Download .env artifact (attempt 3, final)
-        if: ${{ inputs.multi_service == '' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: .
-
-      - name: Load environment variables from .env
-        if: ${{ inputs.multi_service == '' }}
+      # Runtime values are already in this pod's environment. External Secrets
+      # Operator materialises them from Keeper into the `integration-tests-env`
+      # Secret in arc-runners, and the ARC runner container takes the whole
+      # Secret via envFrom (wanaware-infrastructure: modules/arc). There is no
+      # env-file artifact and no `${{ secrets.* }}` fan-out: Keeper is the single
+      # source of truth, so rotating a value there needs no change in any repo.
+      #
+      # Two consequences worth knowing when editing the steps below:
+      #   * `run:` shells inherit the pod environment, so `$DB_USER` works — but
+      #     `${{ env.DB_USER }}` does NOT. Expression context reads $GITHUB_ENV,
+      #     which the pod environment never touches. Use shell syntax.
+      #   * A step-level `env:` block overrides the inherited value. Listing a key
+      #     there with an empty expression blanks it; omit the key instead.
+      - name: Verify required env is present
+        if: ${{ inputs.required_env != '' }}
+        env:
+          REQUIRED_ENV: ${{ inputs.required_env }}
         run: |
-          while IFS= read -r line || [ -n "$line" ]; do
-            # Skip empty lines and comments
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            # Only export lines matching KEY=VALUE pattern
-            if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-              echo "$line" >> $GITHUB_ENV
-            fi
-          done < .env
+          set -euo pipefail
+          MISSING=()
+          while read -r KEY; do
+            [[ -z "$KEY" ]] && continue
+            [[ -z "${!KEY:-}" ]] && MISSING+=("$KEY")
+          done <<< "$REQUIRED_ENV"
+          if ((${#MISSING[@]})); then
+            echo "::error::Not set in the runner environment: ${MISSING[*]}"
+            echo "::error::Check: kubectl -n arc-runners get externalsecret integration-tests-env"
+            exit 1
+          fi
+          echo "All ${REQUIRED_ENV//$'\n'/ } present."
 
-      # --- Multi-service: download and load env files ---
-      - name: Download env-files artifact
-        if: ${{ inputs.multi_service != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: env-files
-          path: services/
-
-      - name: Load environment variables from service .env files
-        if: ${{ inputs.multi_service != '' }}
+      # NATS client auth takes an nkey seed from a *file*, but the value arrives
+      # from Keeper as an env var. Write it to the path callers already point
+      # NATS_NKEY_SEED_FILE at, so no artifact has to carry a credential.
+      - name: Materialise NATS nkey seed file
+        if: ${{ inputs.use_nats || inputs.use_nats_port_forward }}
         run: |
-          find services -name '.env' -type f -print0 | while IFS= read -r -d '' env_file; do
-            while IFS= read -r line || [ -n "$line" ]; do
-              [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-              if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-                echo "$line" >> $GITHUB_ENV
-              fi
-            done < "$env_file"
-          done
+          set -euo pipefail
+          if [[ -z "${NATS_NKEY_SEED:-}" ]]; then
+            echo "NATS_NKEY_SEED not in the runner environment; skipping seed file."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$NATS_NKEY_SEED" > ./nats-nkey.seed
+          echo "NATS_NKEY_SEED_FILE=./nats-nkey.seed" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -317,12 +297,12 @@ jobs:
           # Add hosts entry so TLS server name matches the cert SAN
           echo "127.0.0.1 nats.nats.svc" | sudo tee -a /etc/hosts
           nohup kubectl port-forward -n nats svc/nats \
-            ${{ env.NATS_PORT }}:4222 \
+            "$NATS_PORT":4222 \
             > nats-pf.out 2> nats-pf.err < /dev/null &
           echo "NATS_PORT_FORWARD_PID=$!" >> $GITHUB_ENV
           # Wait for the local listener
           for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 ${{ env.NATS_PORT }}; then
+            if nc -z 127.0.0.1 "$NATS_PORT"; then
               echo "NATS tunnel up"
               exit 0
             fi
@@ -336,9 +316,9 @@ jobs:
           wait_time=5
           max_attempts=3
           for i in $(seq 1 $max_attempts); do
-            if nc -zv nats.nats.svc ${{ env.NATS_PORT }}; then
+            if nc -zv nats.nats.svc "$NATS_PORT"; then
               echo "NATS server is reachable!"
-              echo "NATS_URL=tls://nats.nats.svc:${{ env.NATS_PORT }}" >> $GITHUB_ENV
+              echo "NATS_URL=tls://nats.nats.svc:$NATS_PORT" >> $GITHUB_ENV
               exit 0
             fi
             echo "Attempt $i failed. Waiting ${wait_time}s..."
@@ -448,12 +428,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends netcat-openbsd
           nohup kubectl port-forward -n tunnel svc/cloudsql-proxy-service \
-            ${{ env.DB_PORT }}:5432 \
+            "$DB_PORT":5432 \
             > pf.out 2> pf.err < /dev/null &
           echo "PORT_FORWARD_PID=$!" >> $GITHUB_ENV
           # Wait for the local listener, tolerating proxy pod cold-start.
           for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 ${{ env.DB_PORT }}; then echo "tunnel up"; exit 0; fi
+            if nc -z 127.0.0.1 "$DB_PORT"; then echo "tunnel up"; exit 0; fi
             sleep 2
           done
           echo "port-forward did not come up"; cat pf.err; exit 1
@@ -464,7 +444,7 @@ jobs:
           wait_time=5
           max_attempts=3
           for i in $(seq 1 $max_attempts); do
-            if nc -zv localhost ${{ env.DB_PORT }}; then
+            if nc -zv localhost "$DB_PORT"; then
               echo "DB server is reachable!"
               exit 0
             fi
@@ -484,11 +464,11 @@ jobs:
       - name: Connect to cloud-sql-proxy using PG client
         if: ${{ inputs.use_cloud_sql }}
         run: |
-          PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql \
+          PGPASSWORD="$DB_PASSWORD" psql \
             -h 127.0.0.1 \
-            -p ${{ env.DB_PORT }} \
-            -U "${{ env.DB_USER }}" \
-            -d "${{ env.DB_NAME }}" \
+            -p "$DB_PORT" \
+            -U "$DB_USER" \
+            -d "$DB_NAME" \
             -c 'SELECT NOW()' 2>&1
 
       # --- Build and start Go server ---
@@ -541,35 +521,17 @@ jobs:
           API_PID=$(cat server_pid.txt)
           echo "API_PID=$API_PID" >> $GITHUB_ENV
           echo "Server started with PID: $API_PID"
+        # Everything the server needs — DB_PASSWORD, NEO4J_*, AUTHENTICATION_KEY,
+        # the GraphQL endpoints, NEW_RELIC_*, and the rest — is already in this
+        # pod's environment from Keeper, and the binary inherits it. Only the two
+        # values below are genuinely rig-specific: the server reaches the database
+        # through the local port-forward rather than the cluster address Keeper
+        # holds, and GOPRIVATE is build tooling, not configuration. Adding a key
+        # back here would shadow the Keeper value for this step.
         env:
           SERVER_ENV: ${{ inputs.server_env }}
           GOPRIVATE: github.com/wanaware
-          # Database
           DB_HOST: "127.0.0.1"
-          DB_USER: ${{ env.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ env.DB_NAME }}
-          DB_PORT: ${{ env.DB_PORT }}
-          # Auth0
-          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
-          AUTH0_CLIENT_ID: ${{ secrets.AUTH0_CLIENT_ID }}
-          AUTH0_CLIENT_SECRET: ${{ secrets.AUTH0_CLIENT_SECRET }}
-          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
-          # Neo4j (optional - used by function-integrator)
-          NEO4J_URI: ${{ secrets.NEO4J_URI }}
-          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
-          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
-          # GCP
-          PROJECT_ID: ${{ secrets.GCP_PROJECT }}
-          # Service endpoints (function-integrator)
-          SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT: ${{ secrets.SUBSCRIPTION_MANAGER_GRAPHQL_ENDPOINT }}
-          USER_AUTH_SERVICE_GRAPHQL_ENDPOINT: ${{ secrets.USER_AUTH_SERVICE_GRAPHQL_ENDPOINT }}
-          SMARTY_AUTH_ID: ${{ secrets.SMARTY_AUTH_ID }}
-          SMARTY_AUTH_TOKEN: ${{ secrets.SMARTY_AUTH_TOKEN }}
-          # Common secrets
-          AUTHENTICATION_KEY: ${{ secrets.AUTHENTICATION_KEY }}
-          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
-          NEW_RELIC_APP_NAME: ${{ secrets.NEW_RELIC_APP_NAME }}
 
       - name: Wait for API server to be reachable
         if: ${{ inputs.multi_service == '' }}
@@ -610,15 +572,10 @@ jobs:
         run: |
           chmod +x ${{ inputs.cleanup_script }}
           ${{ inputs.cleanup_script }}
+        # As above: NEO4J_* and DB_* come from the pod environment; only the
+        # local-tunnel host is specific to the rig.
         env:
-          NEO4J_URI: ${{ secrets.NEO4J_URI }}
-          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
-          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
           DB_HOST: "127.0.0.1"
-          DB_PORT: ${{ env.DB_PORT }}
-          DB_USER: ${{ env.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          DB_NAME: ${{ env.DB_NAME }}
 
       # --- Option 1: Use pre_test_setup_script (like create_and_capture_ids.py) ---
       - name: Run Python Script to Get Access Token and Function IDs

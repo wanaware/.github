@@ -72,16 +72,6 @@ on:
         required: false
         default: "."
         type: string
-      caller_repository:
-        description: "Caller repository for artifact download (e.g. wanaware/function-integrator)"
-        required: false
-        default: ""
-        type: string
-      caller_run_id:
-        description: "Caller workflow run ID for artifact download"
-        required: false
-        default: ""
-        type: string
     secrets:
       GCP_SERVICE_ACCOUNT:
         required: true
@@ -159,69 +149,18 @@ jobs:
         if: ${{ inputs.deploy_type != 'release-only' }}
         run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
 
-      # The env-file artifact (repo .env + GitHub secrets appended by the caller's
-      # prepare-env job) is no longer baked into the image. It is downloaded to a
-      # neutral path and attached at deploy time as a Kubernetes secret (GKE) or
-      # Secret Manager secrets (Cloud Run), so one image serves all environments.
-      # The image itself only contains the repo's committed .env (common vars).
-      # download-artifact@v4 resolves the artifact through the run-scoped Artifacts
-      # v4 API (authenticated by the injected runtime token, so no `actions:`
-      # permission is needed). On ephemeral ARC pods the results service is
-      # occasionally not yet consistent for the run when the pod starts, returning
-      # a transient 404. Without a retry that 404 is mistaken for "no artifact" and,
-      # via the outcome gate below, the service deploys WITHOUT its env secrets.
-      # Re-run the action a few times with a gap; each attempt is continue-on-error.
-      # The final `env_artifact` step (whose outcome the gates below key on) then
-      # succeeds iff a .env was actually downloaded, so a genuinely absent artifact
-      # still leaves outcome != success and the gates skip cleanly as before.
-      - name: Download .env artifact (attempt 1)
-        id: dl1
-        if: ${{ inputs.deploy_type != 'release-only' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: ${{ runner.temp }}/env-file
-
-      - name: Wait before .env retry 2
-        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' }}
-        run: sleep 15
-      - name: Download .env artifact (attempt 2)
-        id: dl2
-        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: ${{ runner.temp }}/env-file
-
-      - name: Wait before .env retry 3
-        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
-        run: sleep 30
-      - name: Download .env artifact (attempt 3)
-        id: dl3
-        if: ${{ inputs.deploy_type != 'release-only' && steps.dl1.outcome == 'failure' && steps.dl2.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: env-file
-          path: ${{ runner.temp }}/env-file
-
-      # Single, stable signal the downstream gates key on: success iff a .env was
-      # actually downloaded by any attempt above. A genuinely absent artifact
-      # leaves this at 'failure' (continue-on-error keeps the deploy going).
-      - name: Resolve env-file download outcome
-        id: env_artifact
-        if: ${{ inputs.deploy_type != 'release-only' }}
-        continue-on-error: true
-        run: |
-          if find "${{ runner.temp }}/env-file" -name '.env' -type f | grep -q .; then
-            echo "env-file present"
-            exit 0
-          fi
-          echo "env-file not downloaded after 3 attempts; deploy will proceed without attached env secrets"
-          exit 1
-
+      # This workflow no longer carries runtime env vars. There is no env-file
+      # artifact, no GitHub-secret fan-out, and no `<service>-env` written from
+      # CI. Keeper is the single source of truth for every runtime value, and it
+      # reaches workloads without a pipeline:
+      #
+      #   Keeper -> External Secrets Operator -> Kubernetes Secret -> envFrom (GKE)
+      #   Keeper -> External Secrets Operator -> Kubernetes Secret -> terraform
+      #             apply (modules/cloudrun-env-sync) -> Cloud Run env
+      #
+      # Both legs live in wanaware-infrastructure. What stays a GitHub secret is
+      # CI plumbing only — WIF identifiers, registry host, GH_ACCESS_TOKEN — none
+      # of which is application configuration.
       - name: Build Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
         id: build
@@ -259,106 +198,38 @@ jobs:
           location: ${{ secrets.CLUSTER_REGION }}
           project_id: ${{ secrets.GCP_PROJECT }}
 
-      # Create/update the service's env secret from the env-file artifact so pods
-      # get their env vars at runtime instead of from a baked-in .env. Deployments
-      # reference this secret via envFrom (managed in wanaware-infrastructure).
-      - name: Attach env vars as Kubernetes secret
-        if: ${{ inputs.deploy_type == 'gke' && steps.env_artifact.outcome == 'success' }}
-        run: |
-          ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
-          if [[ -z "$ENV_FILE" ]]; then
-            echo "No .env found in env-file artifact, skipping secret creation."
-            exit 0
-          fi
-          # Normalize the .env: strip surrounding quotes from values, matching how
-          # godotenv parses them (kubectl --from-env-file takes values verbatim,
-          # which would keep literal quotes in the env vars).
-          NORMALIZED="$RUNNER_TEMP/normalized.env"
-          : > "$NORMALIZED"
-          while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line%$'\r'}"
-            case "$line" in ''|\#*) continue ;; esac
-            KEY="${line%%=*}"
-            VALUE="${line#*=}"
-            if [[ "$VALUE" == \"*\" && "$VALUE" == *\" && ${#VALUE} -ge 2 ]]; then
-              VALUE="${VALUE#\"}"; VALUE="${VALUE%\"}"
-            elif [[ "$VALUE" == \'*\' && "$VALUE" == *\' && ${#VALUE} -ge 2 ]]; then
-              VALUE="${VALUE#\'}"; VALUE="${VALUE%\'}"
-            fi
-            printf '%s=%s\n' "$KEY" "$VALUE" >> "$NORMALIZED"
-          done < "$ENV_FILE"
-          # Dedupe keys keeping the last occurrence (godotenv lets later entries
-          # win, e.g. a secret appended after the same key in the committed .env;
-          # kubectl --from-env-file errors on duplicates instead).
-          DEDUPED="$RUNNER_TEMP/deduped.env"
-          tac "$NORMALIZED" | awk -F= '!seen[$1]++' | tac > "$DEDUPED"
-          kubectl create secret generic "${{ inputs.service_name }}-env" \
-            -n "${{ inputs.namespace }}" \
-            --from-env-file="$DEDUPED" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
+      # No env Secret is written here. `<service_name>-env` is owned by External
+      # Secrets Operator, which materialises it from Keeper on a 1m refresh
+      # (wanaware-infrastructure: modules/external-secrets, service_secrets). The
+      # Deployment consumes it via envFrom, so the rollout below is all CI needs
+      # to do — the restarted pods pick up whatever Keeper currently holds.
       - name: Rollout restart (GKE)
         if: ${{ inputs.deploy_type == 'gke' }}
         run: kubectl rollout restart deployment/${{ inputs.deployment_name }} -n ${{ inputs.namespace }}
 
-      # Convert the env-file artifact to the YAML format gcloud expects so the
-      # deploy steps below can attach the env vars directly to the Cloud Run
-      # service/job (--env-vars-file), instead of baking them into the image.
-      - name: Prepare Cloud Run env vars file
-        if: ${{ (inputs.deploy_type == 'cloudrun-service' || inputs.deploy_type == 'cloudrun-job') && steps.env_artifact.outcome == 'success' }}
-        run: |
-          ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
-          if [[ -z "$ENV_FILE" ]]; then
-            echo "No .env found in env-file artifact, skipping Cloud Run env vars."
-            exit 0
-          fi
-          ENV_YAML="$RUNNER_TEMP/cloudrun-env.yaml"
-          : > "$ENV_YAML"
-          while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line%$'\r'}"
-            case "$line" in ''|\#*) continue ;; esac
-            KEY="${line%%=*}"
-            VALUE="${line#*=}"
-            # strip surrounding quotes, matching how godotenv parses .env values
-            if [[ "$VALUE" == \"*\" && "$VALUE" == *\" && ${#VALUE} -ge 2 ]]; then
-              VALUE="${VALUE#\"}"; VALUE="${VALUE%\"}"
-            elif [[ "$VALUE" == \'*\' && "$VALUE" == *\' && ${#VALUE} -ge 2 ]]; then
-              VALUE="${VALUE#\'}"; VALUE="${VALUE%\'}"
-            fi
-            # escape backslashes and double quotes for YAML double-quoted style
-            VALUE="${VALUE//\\/\\\\}"
-            VALUE="${VALUE//\"/\\\"}"
-            printf '%s: "%s"\n' "$KEY" "$VALUE" >> "$ENV_YAML"
-          done < "$ENV_FILE"
-          # Dedupe keys keeping the last occurrence (matches godotenv semantics;
-          # duplicate YAML keys would otherwise be rejected or ambiguous).
-          DEDUPED_YAML="$RUNNER_TEMP/cloudrun-env-deduped.yaml"
-          tac "$ENV_YAML" | awk -F: '!seen[$1]++' | tac > "$DEDUPED_YAML"
-          echo "CLOUDRUN_ENV_YAML=$DEDUPED_YAML" >> "$GITHUB_ENV"
-
-      # --- Cloud Run service deploy ---
+      # --- Cloud Run deploys ---
+      # Deliberately image-only: no --env-vars-file, ever. Cloud Run env vars are
+      # synced from the Keeper-backed Kubernetes Secret at terraform apply time
+      # (wanaware-infrastructure: modules/cloudrun-env-sync). `gcloud run deploy`
+      # and `gcloud run jobs update` preserve the env already on the resource when
+      # the flag is absent, so an image bump here never blanks it — whereas
+      # passing --env-vars-file replaces the whole environment, which is exactly
+      # the failure mode this removal prevents.
       - name: Deploy Cloud Run service
         if: ${{ inputs.deploy_type == 'cloudrun-service' }}
         run: |
-          EXTRA_FLAGS=()
-          [[ -n "$CLOUDRUN_ENV_YAML" ]] && EXTRA_FLAGS+=(--env-vars-file "$CLOUDRUN_ENV_YAML")
           gcloud run deploy ${{ inputs.cloudrun_name }} \
             --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
             --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }} \
-            "${EXTRA_FLAGS[@]}"
+            --project ${{ secrets.GCP_PROJECT }}
 
-      # --- Cloud Run job deploy ---
       - name: Deploy Cloud Run job
         if: ${{ inputs.deploy_type == 'cloudrun-job' }}
         run: |
-          EXTRA_FLAGS=()
-          [[ -n "$CLOUDRUN_ENV_YAML" ]] && EXTRA_FLAGS+=(--env-vars-file "$CLOUDRUN_ENV_YAML")
           gcloud run jobs update ${{ inputs.cloudrun_name }} \
             --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
             --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }} \
-            "${EXTRA_FLAGS[@]}"
+            --project ${{ secrets.GCP_PROJECT }}
 
       # --- Optional: graphdoc generation ---
       - name: Set up Go for private modules

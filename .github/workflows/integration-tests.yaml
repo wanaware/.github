@@ -523,11 +523,12 @@ jobs:
           echo "Server started with PID: $API_PID"
         # Everything the server needs — DB_PASSWORD, NEO4J_*, AUTHENTICATION_KEY,
         # the GraphQL endpoints, NEW_RELIC_*, and the rest — is already in this
-        # pod's environment from Keeper, and the binary inherits it. Only the two
-        # values below are genuinely rig-specific: the server reaches the database
-        # through the local port-forward rather than the cluster address Keeper
-        # holds, and GOPRIVATE is build tooling, not configuration. Adding a key
-        # back here would shadow the Keeper value for this step.
+        # pod's environment from Keeper, and the binary inherits it. Of the three
+        # entries below, only DB_HOST is configuration, and it is rig-specific:
+        # the server reaches the database through the local port-forward, not the
+        # cluster address Keeper holds. SERVER_ENV is the caller's own override
+        # block and GOPRIVATE is build tooling. Adding an application key back
+        # here would shadow the Keeper value for this step.
         env:
           SERVER_ENV: ${{ inputs.server_env }}
           GOPRIVATE: github.com/wanaware

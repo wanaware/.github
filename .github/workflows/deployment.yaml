@@ -82,6 +82,16 @@ on:
         required: false
         default: ""
         type: string
+      manage_env_secret:
+        description: "Create the <service_name>-env Kubernetes Secret from the env-file artifact. Set false when that Secret is owned by External Secrets Operator (Keeper-backed) — otherwise CI and ESO both write it and the object flaps."
+        required: false
+        default: true
+        type: boolean
+      manage_cloudrun_env:
+        description: "Attach env vars to the Cloud Run service/job via --env-vars-file. Set false when they are synced from a Keeper-backed Secret at terraform apply time. When false the deploy still runs, just without the flag, and gcloud preserves the existing env."
+        required: false
+        default: true
+        type: boolean
     secrets:
       GCP_SERVICE_ACCOUNT:
         required: true
@@ -262,8 +272,11 @@ jobs:
       # Create/update the service's env secret from the env-file artifact so pods
       # get their env vars at runtime instead of from a baked-in .env. Deployments
       # reference this secret via envFrom (managed in wanaware-infrastructure).
+      #
+      # Skipped when manage_env_secret is false: that service's Secret is materialised from
+      # Keeper by External Secrets Operator instead, and two writers on one object flap.
       - name: Attach env vars as Kubernetes secret
-        if: ${{ inputs.deploy_type == 'gke' && steps.env_artifact.outcome == 'success' }}
+        if: ${{ inputs.manage_env_secret && inputs.deploy_type == 'gke' && steps.env_artifact.outcome == 'success' }}
         run: |
           ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
           if [[ -z "$ENV_FILE" ]]; then
@@ -304,8 +317,13 @@ jobs:
       # Convert the env-file artifact to the YAML format gcloud expects so the
       # deploy steps below can attach the env vars directly to the Cloud Run
       # service/job (--env-vars-file), instead of baking them into the image.
+      #
+      # Skipped when manage_cloudrun_env is false: those env vars are synced from a
+      # Keeper-backed Kubernetes Secret at terraform apply time. CLOUDRUN_ENV_YAML then stays
+      # unset, the deploy steps below omit --env-vars-file, and gcloud preserves the env
+      # already on the resource — so a plain image bump does not blank it.
       - name: Prepare Cloud Run env vars file
-        if: ${{ (inputs.deploy_type == 'cloudrun-service' || inputs.deploy_type == 'cloudrun-job') && steps.env_artifact.outcome == 'success' }}
+        if: ${{ inputs.manage_cloudrun_env && (inputs.deploy_type == 'cloudrun-service' || inputs.deploy_type == 'cloudrun-job') && steps.env_artifact.outcome == 'success' }}
         run: |
           ENV_FILE=$(find "$RUNNER_TEMP/env-file" -name '.env' -type f | head -1)
           if [[ -z "$ENV_FILE" ]]; then

@@ -522,6 +522,7 @@ jobs:
 
       - name: Start Go server
         if: ${{ inputs.multi_service == '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           chmod +x ${{ inputs.wait_for_it_path }}
           # Write extra server env vars to a temp file and source it
@@ -574,6 +575,7 @@ jobs:
           python-version: "3.8"
 
       - name: Install pip and dependencies
+        working-directory: ${{ inputs.working_directory }}
         run: |
           python -m pip install --upgrade pip
           pip install requests
@@ -582,6 +584,7 @@ jobs:
       # --- Optional: Neo4j/DB cleanup before tests ---
       - name: Clean up Neo4j test data before tests
         if: ${{ inputs.cleanup_script != '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           chmod +x ${{ inputs.cleanup_script }}
           ${{ inputs.cleanup_script }}
@@ -593,6 +596,7 @@ jobs:
       # --- Option 1: Use pre_test_setup_script (like create_and_capture_ids.py) ---
       - name: Run Python Script to Get Access Token and Function IDs
         if: ${{ inputs.pre_test_setup_script != '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           result=$(python ${{ inputs.pre_test_setup_script }})
           SCRIPT_EXIT_CODE=$?
@@ -620,6 +624,7 @@ jobs:
       # --- Option 2: Use simple access_token_script ---
       - name: Fetch access token and build Newman env
         if: ${{ !inputs.skip_access_token && inputs.pre_test_setup_script == '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           OUTPUT=$(python3 ${{ inputs.access_token_script }})
           ACCESS_TOKEN=$(echo "$OUTPUT" | grep "Access Token:" | awk -F': ' '{print $2}')
@@ -664,6 +669,7 @@ jobs:
       # --- Optional: Delete data tags before tests ---
       - name: Delete previously created data tags
         if: ${{ inputs.delete_data_tags_script != '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: python ${{ inputs.delete_data_tags_script }} "$ACCESS_TOKEN"
 
       # --- Option 1: Custom test runner script ---
@@ -671,6 +677,7 @@ jobs:
         if: ${{ inputs.test_runner_script != '' }}
         id: custom_runner
         continue-on-error: true
+        working-directory: ${{ inputs.working_directory }}
         run: |
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           chmod +x ${{ inputs.test_runner_script }}
@@ -679,6 +686,7 @@ jobs:
       # --- Option 2: Direct Newman run ---
       - name: Run Integration Tests (newman)
         if: ${{ inputs.test_runner_script == '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           ${{ inputs.wait_for_it_path }} -t 60 127.0.0.1:8080 && echo "Server is ready"
           echo "NEWMAN_FAILED=false" >> $GITHUB_ENV
@@ -711,6 +719,7 @@ jobs:
       # --- Optional: Post-test cleanup (e.g. delete_nodes.py) ---
       - name: Delete previously created node ids
         if: ${{ always() && inputs.post_test_cleanup_script != '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           if [[ -n "$FUNCTION_IDS" ]]; then
             FUNCTION_IDS_STRING=$(echo "$FUNCTION_IDS" | jq -r '. | join(",")')

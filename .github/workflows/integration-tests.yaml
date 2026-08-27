@@ -128,6 +128,11 @@ on:
         required: false
         default: "."
         type: string
+      ci_app_runtime_sa_email:
+        description: "GCP service account email for WIF auth (IAM signing, GCS, etc.). Each service has its own SA. Falls back to secrets.CI_APP_RUNTIME_SA_EMAIL if not provided."
+        required: false
+        default: ""
+        type: string
       multi_service:
         description: "Path to a script that builds and starts multiple services (e.g. ./integration-tests/scripts/start-services.sh). When set, replaces single-server build/start. PIDs must be written to /tmp/service-pids.txt for cleanup."
         required: false
@@ -488,7 +493,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.CI_APP_RUNTIME_SA_EMAIL }}
+          service_account: ${{ inputs.ci_app_runtime_sa_email != '' && inputs.ci_app_runtime_sa_email || secrets.CI_APP_RUNTIME_SA_EMAIL }}
           create_credentials_file: true
 
       # --- Multi-service manifest mode ---

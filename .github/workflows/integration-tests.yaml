@@ -640,6 +640,7 @@ jobs:
 
       - name: Build Newman environment JSON
         # if: ${{ inputs.test_runner_script == '' }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
           # Build base Newman env JSON
           BASE_ENV=$(jq -n \

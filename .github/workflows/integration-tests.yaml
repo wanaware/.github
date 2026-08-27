@@ -178,7 +178,10 @@ jobs:
       - name: Verify test rig env
         env:
           NEEDS_DB: ${{ inputs.use_cloud_sql }}
-          NEEDS_NATS: ${{ inputs.use_nats || inputs.use_nats_port_forward }}
+          # Only the port-forward path reads NATS_PORT. The local-sidecar path
+          # (use_nats) binds 4222 itself and never looks at it, so requiring it there
+          # fails a job over a value nothing reads.
+          NEEDS_NATS: ${{ inputs.use_nats_port_forward }}
         run: |
           set -euo pipefail
           MISSING=()

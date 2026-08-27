@@ -150,22 +150,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
-      # Runtime values are already in this pod's environment. External Secrets
-      # Operator materialises them from Keeper into the `integration-tests-env`
-      # Secret in arc-runners, and the ARC runner container takes the whole
-      # Secret via envFrom (wanaware-infrastructure: modules/arc). There is no
-      # env-file artifact and no `${{ secrets.* }}` fan-out: Keeper is the single
-      # source of truth, so rotating a value there needs no change in any repo.
+      # Runtime values are already in this job's environment. The ARC runner image's
+      # job-started hook resolves this repo to its own <svc>-env Secret — materialised
+      # from Keeper by External Secrets Operator — and exports it before the first step
+      # runs. Nothing is declared here: a repo gets its env by virtue of being that repo,
+      # so rotating a value in Keeper needs no change in any repo or in this file.
+      # See wanaware-infrastructure: docker/arc-runner/hooks/load-service-env.sh.
       #
       # Two consequences worth knowing when editing the steps below:
-      #   * `run:` shells inherit the pod environment, so `$DB_USER` works — but
-      #     `${{ env.DB_USER }}` does NOT. Expression context reads $GITHUB_ENV,
-      #     which the pod environment never touches. Use shell syntax.
+      #   * The hook writes to $GITHUB_ENV, so values arrive as `${{ env.DB_USER }}` AND
+      #     as $DB_USER in `run:` shells. Both work; earlier revisions of this file were
+      #     shell-only because the values came from envFrom instead.
       #   * A step-level `env:` block overrides the inherited value. Listing a key
       #     there with an empty expression blanks it; omit the key instead.
-      # No per-repo list of names to maintain: the Keeper folder is the source of
-      # truth for WHAT a service receives, so enumerating it here would just be a
-      # second copy to keep in sync.
+      #
+      # No per-repo list of names to maintain: the service's Keeper record is the source
+      # of truth for WHAT it receives, so enumerating it here would just be a second copy.
       #
       # This checks only the handful the workflow needs to build its OWN plumbing,
       # derived from the use_* inputs. Those are the ones that fail misleadingly:
@@ -178,7 +178,10 @@ jobs:
       - name: Verify test rig env
         env:
           NEEDS_DB: ${{ inputs.use_cloud_sql }}
-          NEEDS_NATS: ${{ inputs.use_nats || inputs.use_nats_port_forward }}
+          # Only the port-forward path reads NATS_PORT. The local-sidecar path
+          # (use_nats) binds 4222 itself and never looks at it, so requiring it there
+          # fails a job over a value nothing reads.
+          NEEDS_NATS: ${{ inputs.use_nats_port_forward }}
         run: |
           set -euo pipefail
           MISSING=()
@@ -191,9 +194,10 @@ jobs:
             if [[ -z "${NATS_PORT:-}" ]]; then MISSING+=("NATS_PORT"); fi
           fi
           if ((${#MISSING[@]})); then
-            echo "::error::Missing from the runner environment: ${MISSING[*]}"
+            echo "::error::Missing from the service env: ${MISSING[*]}"
             echo "::error::These build the test rig itself, so an empty value misroutes instead of erroring."
-            echo "::error::Check: kubectl -n arc-runners get externalsecret integration-tests-env"
+            echo "::error::The runner hook resolves this repo to a <svc>-env Secret; check that it exists"
+            echo "::error::and holds these keys, and that any override in the service-env-map ConfigMap is right."
             exit 1
           fi
           echo "Test rig env present."
@@ -206,7 +210,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${NATS_NKEY_SEED:-}" ]]; then
-            echo "NATS_NKEY_SEED not in the runner environment; skipping seed file."
+            echo "NATS_NKEY_SEED not in the service env; skipping seed file."
             exit 0
           fi
           umask 077

@@ -129,7 +129,12 @@ on:
         default: "."
         type: string
       ci_app_runtime_sa_email:
-        description: "GCP service account email for WIF auth (IAM signing, GCS, etc.). Each service has its own SA. Falls back to secrets.CI_APP_RUNTIME_SA_EMAIL if not provided."
+        description: "GCP service account email for WIF auth (IAM signing, GCS, etc.). Each service has its own SA. Falls back to runtime_sa_env_var, then secrets.CI_APP_RUNTIME_SA_EMAIL."
+        required: false
+        default: ""
+        type: string
+      runtime_sa_env_var:
+        description: "Env var name holding the per-service GCP SA email (e.g. INTEGRATOR_PROXY_RUNTIME_SA_EMAIL). Looked up from the runner environment when ci_app_runtime_sa_email is not set."
         required: false
         default: ""
         type: string
@@ -493,11 +498,27 @@ jobs:
             -c 'SELECT NOW()' 2>&1
 
       # --- Build and start Go server ---
+      - name: Resolve application SA email
+        run: |
+          SA="${{ inputs.ci_app_runtime_sa_email }}"
+          if [ -z "$SA" ] && [ -n "${{ inputs.runtime_sa_env_var }}" ]; then
+            VAR_NAME="${{ inputs.runtime_sa_env_var }}"
+            SA="${!VAR_NAME}"
+          fi
+          if [ -z "$SA" ] && [ -n "${CI_APP_RUNTIME_SA_EMAIL:-}" ]; then
+            SA="$CI_APP_RUNTIME_SA_EMAIL"
+          fi
+          if [ -z "$SA" ]; then
+            echo "::error::No application SA email resolved. Provide ci_app_runtime_sa_email, runtime_sa_env_var, or CI_APP_RUNTIME_SA_EMAIL secret."
+            exit 1
+          fi
+          echo "RESOLVED_SA_EMAIL=$SA" >> $GITHUB_ENV
+
       - name: Authenticate to GCP as Application SA
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ inputs.ci_app_runtime_sa_email != '' && inputs.ci_app_runtime_sa_email || secrets.CI_APP_RUNTIME_SA_EMAIL }}
+          service_account: ${{ env.RESOLVED_SA_EMAIL }}
           create_credentials_file: true
 
       # --- Multi-service manifest mode ---

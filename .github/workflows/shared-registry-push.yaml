@@ -109,7 +109,7 @@ jobs:
       - name: Checkout code
         if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Authenticate with GCP Shared Account
         if: ${{ steps.config.outputs.configured == 'true' }}

@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: "Escape-hatch override for runs-on. Leave empty (default) to run on the in-house dev ARC scale set (arc-shared-dev) — integration tests always run against the dev tier (environment: development, PRs to dev). Set to 'ubuntu-latest' or a specific label only to opt out of ARC."
+        description: "Escape-hatch override for runs-on. Leave empty (default) to run on the in-house dev ARC scale set (arc-shared-dev) — integration tests always run against the dev tier (environment: development, PRs to dev). Set to 'ubuntu-latest' or a specific label only to opt out of ARC. A non-ARC runner gets none of the CI env."
         required: false
         default: ""
         type: string
@@ -129,7 +129,7 @@ on:
         default: "."
         type: string
       ci_app_runtime_sa_email:
-        description: "GCP service account email for WIF auth (IAM signing, GCS, etc.). Each service has its own SA. Falls back to secrets.CI_APP_RUNTIME_SA_EMAIL if not provided."
+        description: "GCP service account email for WIF auth (IAM signing, GCS, etc.). Each service passes its own SA."
         required: false
         default: ""
         type: string
@@ -230,13 +230,13 @@ jobs:
       - name: Authenticate with GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       # --- Optional: Redis ---
       - name: Start Local Redis Instance
@@ -306,9 +306,9 @@ jobs:
         if: ${{ inputs.use_nats_port_forward }}
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ secrets.CLUSTER_NAME }}
-          location: ${{ secrets.CLUSTER_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_REGION }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       - name: Port-forward NATS via in-cluster service
         if: ${{ inputs.use_nats_port_forward }}
@@ -369,9 +369,9 @@ jobs:
         if: ${{ inputs.use_vault }}
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ secrets.CLUSTER_NAME }}
-          location: ${{ secrets.CLUSTER_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_REGION }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       - name: Mint Vault ServiceAccount token
         if: ${{ inputs.use_vault }}
@@ -411,8 +411,6 @@ jobs:
       - name: Set up Go environment for private repo access
         run: |
           git config --global url."https://$GH_ACCESS_TOKEN@github.com/".insteadOf "https://github.com/"
-        env:
-          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
 
       - name: Download Go Modules
         if: ${{ inputs.multi_service == '' }}
@@ -439,9 +437,9 @@ jobs:
         if: ${{ inputs.use_cloud_sql }}
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ secrets.CLUSTER_NAME }}
-          location: ${{ secrets.CLUSTER_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_REGION }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       - name: Port-forward Cloud SQL via in-cluster proxy
         if: ${{ inputs.use_cloud_sql }}
@@ -496,8 +494,8 @@ jobs:
       - name: Authenticate to GCP as Application SA
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ inputs.ci_app_runtime_sa_email != '' && inputs.ci_app_runtime_sa_email || secrets.CI_APP_RUNTIME_SA_EMAIL }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ inputs.ci_app_runtime_sa_email }}
           create_credentials_file: true
 
       # --- Multi-service manifest mode ---
@@ -724,7 +722,7 @@ jobs:
           fi
           gh pr comment ${{ github.event.pull_request.number }} --body-file comment_integration_tests.md
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
 
       # --- Optional: Post-test cleanup (e.g. delete_nodes.py) ---
       - name: Delete previously created node ids

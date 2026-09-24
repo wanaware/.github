@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: 'Escape-hatch override for runs-on. Leave empty (default) to auto-select the in-house ARC scale set for the target env (arc-shared-dev|stage|prod, derived from environment_name). Set to "ubuntu-latest" or a specific label only to opt a job out of ARC.'
+        description: 'Escape-hatch override for runs-on. Leave empty (default) to auto-select the in-house ARC scale set for the target env (arc-shared-dev|stage|prod, derived from environment_name). Set to "ubuntu-latest" or a specific label only to opt a job out of ARC. A non-ARC runner gets none of the CI env.'
         required: false
         default: ""
         type: string
@@ -72,41 +72,11 @@ on:
         required: false
         default: "."
         type: string
-    secrets:
-      GCP_SERVICE_ACCOUNT:
-        required: true
-        description: "GCP service account email to impersonate via WIF (e.g. tf-deploy@my-project.iam.gserviceaccount.com)."
-      GCP_WORKLOAD_IDENTITY_PROVIDER:
-        required: true
-        description: "Full WIF provider resource name (e.g. projects/123/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider)."
-      GCP_PROJECT:
+      push_to_shared_registry:
+        description: "Also push the image to the shared registry for the wanaware-operator"
         required: false
-      GCP_REGISTRY:
-        required: false
-      GH_ACCESS_TOKEN:
-        required: false
-      CLUSTER_NAME:
-        required: false
-      CLUSTER_REGION:
-        required: false
-      BUCKET_NAME:
-        required: false
-
-      # Secrets for the optional shared-registry push (see the
-      # push-to-shared-registry job below). All optional: when they are not set
-      # the shared push is skipped and nothing else changes.
-      GCP_SERVICE_ACCOUNT_SHARED:
-        required: false
-        description: "Shared-project GCP service account email to impersonate via WIF."
-      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
-        required: false
-        description: "Full WIF provider resource name for the shared project."
-      GCP_PROJECT_SHARED:
-        required: false
-        description: "Shared GCP project ID that receives the image."
-      GCP_REGISTRY_SHARED:
-        required: false
-        description: "Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev)."
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -137,17 +107,17 @@ jobs:
       - name: Authenticate with GCP
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       - name: Configure Docker to use the gcloud command-line tool as a credential helper
         if: ${{ inputs.deploy_type != 'release-only' }}
-        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY }}
+        run: gcloud auth configure-docker ${{ env.GCP_REGISTRY }}
 
       # This workflow no longer carries runtime env vars. There is no env-file
       # artifact, no GitHub-secret fan-out, and no `<service>-env` written from
@@ -158,9 +128,9 @@ jobs:
       #   Keeper -> External Secrets Operator -> Kubernetes Secret -> terraform
       #             apply (modules/cloudrun-env-sync) -> Cloud Run env
       #
-      # Both legs live in wanaware-infrastructure. What stays a GitHub secret is
-      # CI plumbing only — WIF identifiers, registry host, GH_ACCESS_TOKEN — none
-      # of which is application configuration.
+      # Both legs live in wanaware-infrastructure. CI plumbing (WIF identifiers,
+      # registry host, GH_ACCESS_TOKEN) comes from the runner's Keeper-backed
+      # ci-workload env; nothing is a GitHub secret.
       - name: Build Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
         id: build
@@ -170,16 +140,16 @@ jobs:
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: false
           load: true
-          tags: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+          tags: ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |
-            GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+            GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
 
       - name: Run Trivy vulnerability scanner on image
         if: ${{ inputs.deploy_type != 'release-only' }}
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: "image"
-          image-ref: ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+          image-ref: ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           ignore-unfixed: true
           format: "table"
           severity: "CRITICAL,HIGH"
@@ -187,16 +157,16 @@ jobs:
 
       - name: Push Docker image
         if: ${{ inputs.deploy_type != 'release-only' }}
-        run: docker push ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest
+        run: docker push ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest
 
       # --- GKE deploy ---
       - name: Get GKE Credentials
         if: ${{ inputs.deploy_type == 'gke' }}
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ secrets.CLUSTER_NAME }}
-          location: ${{ secrets.CLUSTER_REGION }}
-          project_id: ${{ secrets.GCP_PROJECT }}
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_REGION }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       # No env Secret is written here. `<service_name>-env` is owned by External
       # Secrets Operator, which materialises it from Keeper on a 1m refresh
@@ -219,25 +189,23 @@ jobs:
         if: ${{ inputs.deploy_type == 'cloudrun-service' }}
         run: |
           gcloud run deploy ${{ inputs.cloudrun_name }} \
-            --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
-            --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }}
+            --image ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
+            --region ${{ env.CLUSTER_REGION }} \
+            --project ${{ env.GCP_PROJECT }}
 
       - name: Deploy Cloud Run job
         if: ${{ inputs.deploy_type == 'cloudrun-job' }}
         run: |
           gcloud run jobs update ${{ inputs.cloudrun_name }} \
-            --image ${{ secrets.GCP_REGISTRY }}/${{ secrets.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
-            --region ${{ secrets.CLUSTER_REGION }} \
-            --project ${{ secrets.GCP_PROJECT }}
+            --image ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
+            --region ${{ env.CLUSTER_REGION }} \
+            --project ${{ env.GCP_PROJECT }}
 
       # --- Optional: graphdoc generation ---
       - name: Set up Go for private modules
         if: ${{ inputs.generate_docs }}
         run: |
           git config --global url."https://$GH_ACCESS_TOKEN@github.com/".insteadOf "https://github.com/"
-        env:
-          GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
 
       - name: Install graphdoc
         if: ${{ inputs.generate_docs }}
@@ -345,7 +313,7 @@ jobs:
         if: steps.deploy_status.outputs.success == 'true'
         uses: WanAware/.github/.github/actions/gcs-history@prod
         with:
-          bucket_name: ${{ secrets.BUCKET_NAME }}
+          bucket_name: ${{ env.BUCKET_NAME }}
           env: ${{ env.DEPLOY_ENV }}
           tag: ${{ env.DEPLOY_TAG }}
           title: ${{ env.DEPLOY_TITLE }}
@@ -356,13 +324,13 @@ jobs:
 
       - name: Upload docs to GCS
         if: ${{ inputs.generate_docs }}
-        run: gcloud storage cp -r "$DOCS_WORKING_DIRECTORY"/output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}
+        run: gcloud storage cp -r "$DOCS_WORKING_DIRECTORY"/output-folder/* gs://${{ env.BUCKET_NAME }}/${{ inputs.service_name }}
         env:
           DOCS_WORKING_DIRECTORY: ${{ inputs.docs_working_directory }}
 
       - name: Upload release files to GCS
         if: ${{ inputs.upload_release_files && !inputs.generate_docs }}
-        run: gcloud storage cp -r output-folder/* gs://${{ secrets.BUCKET_NAME }}/${{ inputs.service_name }}/
+        run: gcloud storage cp -r output-folder/* gs://${{ env.BUCKET_NAME }}/${{ inputs.service_name }}/
 
   # Optional, best-effort push of the service image to the shared GCP project so
   # the wanaware-operator can pull and run it. Kept as a separate job calling a
@@ -370,15 +338,13 @@ jobs:
   # on its own runner, only ever authenticates to the shared project, and cannot
   # affect the deploy's gcloud credentials, its result, or its timing.
   #
-  # `always()` means this runs even if the deploy job fails, and no step here
-  # can fail the overall run (every step is continue-on-error, and the called
-  # workflow skips cleanly when the shared secrets are absent). Callers do not
-  # need any changes: the shared push activates purely by setting the four
-  # GCP_*_SHARED secrets on the repo.
+  # Opt-in via push_to_shared_registry. `always()` means this runs even if the
+  # deploy job fails, and no step here can fail the overall run (every step is
+  # continue-on-error).
   push-to-shared-registry:
     name: Push Image to Shared Registry
     needs: deploy
-    if: ${{ always() && inputs.deploy_type != 'release-only' }}
+    if: ${{ always() && inputs.push_to_shared_registry && inputs.deploy_type != 'release-only' }}
     uses: WanAware/.github/.github/workflows/shared-registry-push.yaml@prod
     permissions:
       contents: read
@@ -389,9 +355,3 @@ jobs:
       image_path: ${{ inputs.image_path }}
       docker_context: ${{ inputs.docker_context }}
       dockerfile_path: ${{ inputs.dockerfile_path }}
-    secrets:
-      GCP_SERVICE_ACCOUNT_SHARED: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
-      GCP_PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
-      GCP_REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
-      GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}

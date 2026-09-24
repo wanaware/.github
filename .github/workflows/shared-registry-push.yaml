@@ -46,22 +46,6 @@ on:
         required: false
         default: 'Dockerfile'
         type: string
-    secrets:
-      GCP_SERVICE_ACCOUNT_SHARED:
-        required: false
-        description: 'Shared-project GCP service account email to impersonate via WIF.'
-      GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED:
-        required: false
-        description: 'Full WIF provider resource name for the shared project.'
-      GCP_PROJECT_SHARED:
-        required: false
-        description: 'Shared GCP project ID that receives the image.'
-      GCP_REGISTRY_SHARED:
-        required: false
-        description: 'Shared Artifact Registry host (e.g. us-central1-docker.pkg.dev).'
-      GH_ACCESS_TOKEN:
-        required: false
-        description: 'Token passed as a build-arg for pulling private Go modules.'
 
 jobs:
   push-to-shared:
@@ -85,61 +69,34 @@ jobs:
       id-token: write
 
     steps:
-      # Skip everything cleanly when the shared secrets are not configured, so
-      # repos that have not onboarded do not show failed steps on every run.
-      - name: Check shared registry configuration
-        id: config
-        continue-on-error: true
-        # Secrets are passed through env rather than interpolated into the
-        # script so their values are never expanded into the shell source.
-        env:
-          PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
-          REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
-          SA_SHARED: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
-          WIF_SHARED: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
-        run: |
-          if [[ -n "$PROJECT_SHARED" && -n "$REGISTRY_SHARED" \
-             && -n "$SA_SHARED" && -n "$WIF_SHARED" ]]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "Shared registry secrets not configured; skipping shared push."
-          fi
-
       - name: Checkout code
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
         uses: actions/checkout@v4
 
       - name: Authenticate with GCP Shared Account
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_SHARED }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER_SHARED }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT_SHARED }}
 
       - name: Set up gcloud for GCP Shared Account
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_SHARED }}
+          project_id: ${{ env.GCP_PROJECT_SHARED }}
 
       - name: Configure Docker for GCP Shared Registry
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
-        run: gcloud auth configure-docker ${{ secrets.GCP_REGISTRY_SHARED }}
+        run: gcloud auth configure-docker ${{ env.GCP_REGISTRY_SHARED }}
 
       - name: Compute timestamp tag
         id: timestamp
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
         run: echo "value=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image to GCP Shared Registry
         id: build_push
-        if: ${{ steps.config.outputs.configured == 'true' }}
         continue-on-error: true
         uses: docker/build-push-action@v4
         with:
@@ -147,26 +104,24 @@ jobs:
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: true
           tags: |
-            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:latest
-            ${{ secrets.GCP_REGISTRY_SHARED }}/${{ secrets.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
+            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:latest
+            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
           build-args: |
-            GH_ACCESS_TOKEN=${{ secrets.GH_ACCESS_TOKEN }}
+            GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
 
       # Surface the result. Because the push is best-effort, the job goes green
       # even when it fails, so without an explicit warning a stale shared
       # registry would go unnoticed. `::warning::` shows an annotation on the
       # run page itself, not just in the summary tab.
       - name: Report shared push result
-        if: ${{ always() && steps.config.outputs.configured == 'true' }}
+        if: ${{ always() }}
         continue-on-error: true
         env:
-          REGISTRY_SHARED: ${{ secrets.GCP_REGISTRY_SHARED }}
-          PROJECT_SHARED: ${{ secrets.GCP_PROJECT_SHARED }}
           IMAGE_PATH: ${{ inputs.image_path }}
           TIMESTAMP_TAG: ${{ steps.timestamp.outputs.value }}
           PUSH_OUTCOME: ${{ steps.build_push.outcome }}
         run: |
-          BASE="$REGISTRY_SHARED/$PROJECT_SHARED/wanaware-platform/$IMAGE_PATH"
+          BASE="$GCP_REGISTRY_SHARED/$GCP_PROJECT_SHARED/wanaware-platform/$IMAGE_PATH"
           if [[ "$PUSH_OUTCOME" == "success" ]]; then
             echo "Pushed to shared registry: $BASE:latest, $BASE:$TIMESTAMP_TAG" >> "$GITHUB_STEP_SUMMARY"
           else

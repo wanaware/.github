@@ -17,7 +17,7 @@ jobs:
     # In-house ARC (dev cluster runners) — no GitHub-hosted execution. PR checks aren't tied to
     # an env, so they use arc-shared-dev.
     runs-on: arc-shared-dev
-    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "solution-deployment-platform", "azure-integrator", "gcp-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
+    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "solution-deployment-platform", "azure-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
 
     steps:
       - name: Validate PR title format
@@ -99,7 +99,7 @@ jobs:
     name: Validate PR Description
     # In-house ARC (dev cluster runners) — no GitHub-hosted execution.
     runs-on: arc-shared-dev
-    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "solution-deployment-platform", "azure-integrator", "gcp-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
+    if: ${{ !contains(fromJson('["portal-backend", "portal-frontend", "solution-deployment-platform", "azure-integrator", "gcp-integrator-shell-setup", "wanaware-doc"]'), github.event.repository.name) }}
 
     steps:
       - name: Validate PR description

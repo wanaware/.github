@@ -387,8 +387,10 @@ jobs:
           # Convention: KSA <service>-ksa lives in namespace <service>.
           ns="${VAULT_KSA_NAMESPACE:-${VAULT_KSA%-ksa}}"
 
-          kubectl get secret vault-tls -n vault -o jsonpath='{.data.ca\.crt}' \
-            | base64 -d > /tmp/vault-ca.crt
+          # A ConfigMap, not the vault-tls Secret: that Secret also holds the
+          # OpenBao server key, and CI has no access to Secrets.
+          kubectl get configmap vault-ca -n vault -o jsonpath='{.data.ca\.crt}' \
+            > /tmp/vault-ca.crt
           if [ ! -s /tmp/vault-ca.crt ]; then
             echo "Vault CA bundle came back empty"; exit 1
           fi

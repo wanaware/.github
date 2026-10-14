@@ -310,6 +310,19 @@ jobs:
           location: ${{ env.CLUSTER_REGION }}
           project_id: ${{ env.GCP_PROJECT }}
 
+      # The service env's NATS_TLS_CA_FILE is the pod's mount path, which a runner
+      # does not have. Same as the Vault CA: a public ConfigMap, CI has no access to Secrets.
+      - name: Fetch NATS CA
+        if: ${{ inputs.use_nats_port_forward }}
+        run: |
+          set -euo pipefail
+          kubectl get configmap nats-ca -n nats -o jsonpath='{.data.ca\.crt}' \
+            > /tmp/nats-ca.crt
+          if [ ! -s /tmp/nats-ca.crt ]; then
+            echo "NATS CA bundle came back empty"; exit 1
+          fi
+          echo "NATS_TLS_CA_FILE=/tmp/nats-ca.crt" >> $GITHUB_ENV
+
       - name: Port-forward NATS via in-cluster service
         if: ${{ inputs.use_nats_port_forward }}
         run: |

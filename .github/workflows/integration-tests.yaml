@@ -209,7 +209,8 @@ jobs:
 
       # NATS client auth takes an nkey seed from a *file*, but the value arrives
       # from Keeper as an env var. Write it to the path callers already point
-      # NATS_NKEY_SEED_FILE at, so no artifact has to carry a credential.
+      # NATS_NKEY_SEED_FILE at, so no artifact has to carry a credential. The path is
+      # absolute because the server and test script run in inputs.working_directory.
       - name: Materialise NATS nkey seed file
         if: ${{ inputs.use_nats || inputs.use_nats_port_forward }}
         run: |
@@ -220,7 +221,7 @@ jobs:
           fi
           umask 077
           printf '%s' "$NATS_NKEY_SEED" > ./nats-nkey.seed
-          echo "NATS_NKEY_SEED_FILE=./nats-nkey.seed" >> "$GITHUB_ENV"
+          echo "NATS_NKEY_SEED_FILE=$PWD/nats-nkey.seed" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v4

@@ -129,6 +129,7 @@ jobs:
             ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
           build-args: |
             GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
+            GIT_SHA=${{ github.sha }}
 
       # Surface the result. Because the push is best-effort, the job goes green
       # even when it fails, so without an explicit warning a stale shared

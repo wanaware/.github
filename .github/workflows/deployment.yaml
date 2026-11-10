@@ -165,6 +165,7 @@ jobs:
           tags: ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |
             GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
+            GIT_SHA=${{ github.sha }}
 
       - name: Run Trivy vulnerability scanner on image
         if: ${{ inputs.deploy_type != 'release-only' }}
@@ -187,6 +188,7 @@ jobs:
           tags: ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest
           build-args: |
             GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
+            GIT_SHA=${{ github.sha }}
 
       # --- GKE deploy ---
       - name: Get GKE Credentials

@@ -23,7 +23,7 @@ on:
         default: ""
         type: string
       deploy_type:
-        description: "Deployment target: gke | cloudrun-service | cloudrun-job | build-only | release-only"
+        description: "Deployment target: gke | build-only | release-only (anything else builds and pushes only)"
         required: false
         default: "gke"
         type: string
@@ -38,7 +38,7 @@ on:
         default: ""
         type: string
       cloudrun_name:
-        description: "Cloud Run service or job name (required if deploy_type != gke)"
+        description: "Ignored. Cloud Run is gone; kept until no caller branch passes it, then remove"
         required: false
         default: ""
         type: string
@@ -125,10 +125,8 @@ jobs:
       # reaches workloads without a pipeline:
       #
       #   Keeper -> External Secrets Operator -> Kubernetes Secret -> envFrom (GKE)
-      #   Keeper -> External Secrets Operator -> Kubernetes Secret -> terraform
-      #             apply (modules/cloudrun-env-sync) -> Cloud Run env
       #
-      # Both legs live in wanaware-infrastructure. CI plumbing (WIF identifiers,
+      # That path lives in wanaware-infrastructure. CI plumbing (WIF identifiers,
       # registry host, GH_ACCESS_TOKEN) comes from the runner's Keeper-backed
       # ci-workload env; nothing is a GitHub secret.
       # ARC runners build through the pod's rootless BuildKit sidecar ($BUILDKIT_HOST):
@@ -207,30 +205,6 @@ jobs:
       - name: Rollout restart (GKE)
         if: ${{ inputs.deploy_type == 'gke' }}
         run: kubectl rollout restart deployment/${{ inputs.deployment_name }} -n ${{ inputs.namespace }}
-
-      # --- Cloud Run deploys ---
-      # Deliberately image-only: no --env-vars-file, ever. Cloud Run env vars are
-      # synced from the Keeper-backed Kubernetes Secret at terraform apply time
-      # (wanaware-infrastructure: modules/cloudrun-env-sync). `gcloud run deploy`
-      # and `gcloud run jobs update` preserve the env already on the resource when
-      # the flag is absent, so an image bump here never blanks it — whereas
-      # passing --env-vars-file replaces the whole environment, which is exactly
-      # the failure mode this removal prevents.
-      - name: Deploy Cloud Run service
-        if: ${{ inputs.deploy_type == 'cloudrun-service' }}
-        run: |
-          gcloud run deploy ${{ inputs.cloudrun_name }} \
-            --image ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
-            --region ${{ env.CLUSTER_REGION }} \
-            --project ${{ env.GCP_PROJECT }}
-
-      - name: Deploy Cloud Run job
-        if: ${{ inputs.deploy_type == 'cloudrun-job' }}
-        run: |
-          gcloud run jobs update ${{ inputs.cloudrun_name }} \
-            --image ${{ env.GCP_REGISTRY }}/${{ env.GCP_PROJECT }}/${{ inputs.image_path }}:latest \
-            --region ${{ env.CLUSTER_REGION }} \
-            --project ${{ env.GCP_PROJECT }}
 
       # --- Optional: graphdoc generation ---
       - name: Set up Go for private modules

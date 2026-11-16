@@ -158,7 +158,10 @@ def outside_fences(lines):
 
 
 def prose(lines):
-    """Yield (lineno, text) outside fences, with HTML comments and inline code removed."""
+    """Yield (lineno, text) outside fences, with HTML comments and inline code removed.
+
+    Reads each line left to right, so a comment marker inside a code span (Write `<!--` to
+    start a comment) is example text, not the start of a comment."""
     in_comment = False
     for i, line in outside_fences(lines):
         out, rest = "", line
@@ -169,13 +172,16 @@ def prose(lines):
                     rest = ""
                 else:
                     rest, in_comment = rest[end + 3:], False
+                continue
+            start = rest.find("<!--")
+            code = INLINE_CODE_RE.search(rest)
+            if code and (start < 0 or code.start() < start):
+                out, rest = out + rest[:code.start()], rest[code.end():]
+            elif start < 0:
+                out, rest = out + rest, ""
             else:
-                start = rest.find("<!--")
-                if start < 0:
-                    out, rest = out + rest, ""
-                else:
-                    out, rest, in_comment = out + rest[:start], rest[start + 4:], True
-        yield i, INLINE_CODE_RE.sub("", out)
+                out, rest, in_comment = out + rest[:start], rest[start + 4:], True
+        yield i, out
 
 
 def mermaid_blocks(lines):

@@ -129,6 +129,14 @@ class MarkdownHelpersTest(unittest.TestCase):
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]
         self.assertEqual([t for _, t in dk.relative_links(lines)], ["real.md", "live.md"])
 
+    def test_comment_markers_in_code_spans_do_not_open_comments(self):
+        lines = ["Write `<!--` to start a comment.", "See [arch](missing.md).", "",
+                 "`<!--` and `-->` mark a comment, so <!-- [hidden](h.md) --> [shown](s.md)."]
+        self.assertEqual([t for _, t in dk.relative_links(lines)], ["missing.md", "s.md"])
+        self.assertEqual(list(dk.prose(["a `<!--` b <!-- c --> e `x` f"])), [(1, "a  b  e  f")])
+        # Inside a comment there are no code spans: the comment ends at the first -->, as in HTML.
+        self.assertEqual(list(dk.prose(["<!-- c `-->` d"])), [(1, "` d")])
+
     def test_link_destinations(self):
         lines = ["[a](../schema(v2).graphql) [b](<path with spaces.md>) [c](x.md \"title\")",
                  "[ref]: ../defs.md \"title\"", "[^1]: a footnote, not a link", "[e](https://example.com)"]

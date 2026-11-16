@@ -133,7 +133,9 @@ runs:
         failed=0
         while IFS= read -r f; do
           mkdir -p "$out/$(dirname "$f")"
-          if "$mmdc" -q -p "$RUNNER_TEMP/puppeteer.json" -i "$f" -o "$out/$f" > "$RUNNER_TEMP/mmdc.log" 2>&1; then
+          # Render only the diagrams readers see (not ones inside HTML comments).
+          python3 "$GITHUB_ACTION_PATH/docs_kit.py" mermaid-source "$f" "$out/$f.src.md" || exit 1
+          if "$mmdc" -q -p "$RUNNER_TEMP/puppeteer.json" -i "$out/$f.src.md" -o "$out/$f" > "$RUNNER_TEMP/mmdc.log" 2>&1; then
             echo "Rendered $f"
           else
             failed=1

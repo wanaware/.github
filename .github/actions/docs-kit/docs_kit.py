@@ -71,6 +71,7 @@ SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")  # underline of a Setext headin
 REF_USE_RE = re.compile(r"\[([^\[\]]+)\]\[([^\[\]]*)\]|\[([^\[\]]+)\](?![\[(:])")  # [t][l], [l][], [l]
 FOOTNOTE_DEF_RE = re.compile(r"^ {0,3}\[\^[^\]]+\]:")  # a footnote definition, any text after it
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
+QUOTE_RE = re.compile(r"^ {0,3}> ?")  # one level of block quote marker
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")  # a span closes on the same run length
 FRONT_RE = re.compile(r"^<!--\s*docs-kit:(.*?)-->\s*$")
 ATTR_RE = re.compile(r'([a-z][a-z-]*)(?:="([^"]*)")?')
@@ -164,16 +165,30 @@ def outside_fences(lines):
             yield i, line
 
 
-def visible_lines(lines, keep_code=False):
-    """Yield (lineno, text) for every line, with HTML comments removed and text None inside
-    fenced code. Inline code is kept (keep_code) or removed.
+def visible_lines(lines, keep_code=False, dequote=False):
+    """[(lineno, text)] for every line, with HTML comments removed and text None inside
+    fenced code. Inline code is kept (keep_code) or removed. With dequote, the content of a
+    block quote is read as Markdown in its own right (its "> " markers removed), so a code
+    fence inside a quote is code too.
 
     Reads each line left to right, so a comment marker inside a code span (Write `<!--` to
     start a comment) is example text, not the start of a comment."""
+    result, quote = [], []
+
+    def flush_quote():
+        if quote:
+            inner = visible_lines([t for _, t in quote], keep_code, dequote)
+            result.extend((quote[n - 1][0], text) for n, text in inner)
+            quote.clear()
+
     in_comment = False
     for i, line, info, _ in scan(lines):
+        if dequote and info is None and not in_comment and QUOTE_RE.match(line):
+            quote.append((i, QUOTE_RE.sub("", line, count=1)))
+            continue
+        flush_quote()
         if info is not None:
-            yield i, None
+            result.append((i, None))
             continue
         out, rest = "", line
         block_start = re.match(r" {0,3}<!--", line) is not None
@@ -196,7 +211,9 @@ def visible_lines(lines, keep_code=False):
                 out, rest, in_comment = out + rest[:start], rest[start + 4:], True
             else:  # a stray "<!--" inside a paragraph is text, as on GitHub
                 out, rest = out + rest[:start + 4], rest[start + 4:]
-        yield i, out
+        result.append((i, out))
+    flush_quote()
+    return result
 
 
 def comment_closes(lines, lineno, rest):
@@ -212,18 +229,49 @@ def comment_closes(lines, lineno, rest):
 
 
 def prose(lines):
-    """Yield (lineno, text) outside fences, with HTML comments and inline code removed."""
-    for i, text in visible_lines(lines):
+    """Yield (lineno, text) outside code (block quotes included) and HTML comments."""
+    for i, text in visible_lines(lines, dequote=True):
         if text is not None:
             yield i, text
 
 
+def commented_fences(lines):
+    """Line numbers of fence openings that sit inside an HTML comment (hidden on GitHub)."""
+    hidden, in_comment = set(), False
+    for i, line, info, delimiter in scan(lines):
+        if info is not None:
+            if delimiter and in_comment:
+                hidden.add(i)
+            continue
+        rest = line
+        while rest:
+            if in_comment:
+                end = rest.find("-->")
+                rest, in_comment = ("", True) if end < 0 else (rest[end + 3:], False)
+                continue
+            start = rest.find("<!--")
+            code = INLINE_CODE_RE.search(rest)
+            if code and (start < 0 or code.start() < start):
+                rest = rest[code.end():]
+            elif start < 0:
+                rest = ""
+            else:
+                rest, in_comment = rest[start + 4:], True
+    return hidden
+
+
 def mermaid_blocks(lines):
-    """Return [(first_lineno, [(lineno, line), ...])] for every ```mermaid block."""
-    blocks, current = [], None
+    """Return [(first_lineno, [(lineno, line), ...])] for every visible ```mermaid block
+    (one inside an HTML comment is hidden on GitHub, so it is left out)."""
+    blocks, current, hidden = [], None, commented_fences(lines)
     for i, line, info, delimiter in scan(lines):
         is_mermaid = info is not None and info.split()[:1] == ["mermaid"]
-        if delimiter and is_mermaid and current is None:
+        if delimiter and is_mermaid and current is None and i in hidden:
+            current = "hidden"
+        elif current == "hidden":
+            if delimiter:
+                current = None
+        elif delimiter and is_mermaid and current is None:
             current = (i, [])
         elif delimiter and current is not None:
             blocks.append(current)
@@ -378,7 +426,7 @@ def relative_links(lines, unused_definitions=True):
         if ref and (used is None or label_key(re.match(r" {0,3}\[([^\]]+)\]", text).group(1)) in used):
             found.append((lineno, offset, ref.group(1) if ref.group(1) is not None else ref.group(2)))
     for lineno, _, target in sorted(found):
-        if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
+        if target and not target.startswith("//") and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
             yield lineno, target
 
 
@@ -1076,6 +1124,14 @@ def cmd_list(args):
     return 0
 
 
+def cmd_mermaid_source(args):
+    """Write the visible Mermaid blocks of a document to a file for the Mermaid CLI."""
+    blocks = mermaid_blocks(read_lines(args.source))
+    text = "".join("```mermaid\n" + "\n".join(l for _, l in body) + "\n```\n\n" for _, body in blocks)
+    write_text(os.path.abspath(args.dest), text)
+    return 0
+
+
 def annotate():
     return os.environ.get("GITHUB_ACTIONS") == "true"
 
@@ -1108,9 +1164,14 @@ def main(argv=None):
     l.add_argument("--changed-since", help="only documents changed between this commit and HEAD")
     l.add_argument("--mermaid", action="store_true", help="only documents that contain Mermaid diagrams")
 
+    m = sub.add_parser("mermaid-source", help="write a document's visible Mermaid blocks to a file")
+    m.add_argument("source")
+    m.add_argument("dest")
+
     args = ap.parse_args(argv)
     try:
-        return {"check": cmd_check, "scaffold": cmd_scaffold, "list": cmd_list}[args.command](args)
+        return {"check": cmd_check, "scaffold": cmd_scaffold, "list": cmd_list,
+                "mermaid-source": cmd_mermaid_source}[args.command](args)
     except KitError as exc:
         print(f"docs-kit: {exc}", file=sys.stderr)
         return 2

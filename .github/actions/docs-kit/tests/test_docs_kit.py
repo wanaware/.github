@@ -195,6 +195,24 @@ class MarkdownHelpersTest(unittest.TestCase):
         # Brackets in different paragraphs never form a link.
         self.assertEqual(links(["An open [bracket.", "", "Later](x.md)"]), [])
 
+    def test_code_inside_block_quotes_and_protocol_relative_urls_are_not_relative_links(self):
+        lines = ["> ```markdown", "> [example](missing.md)", "> ```", "", "> See [real](real.md).",
+                 "", "[site](//example.com/page)"]
+        self.assertEqual([t for _, t in dk.relative_links(lines)], ["real.md"])
+
+    def test_commented_out_diagrams_are_neither_linted_nor_rendered(self):
+        lines = ["<!--", "```mermaid", "graph TD", "```", "-->", "", "```mermaid", "flowchart LR", "  a --> b", "```"]
+        self.assertEqual(dk.lint_mermaid(lines), [])
+        self.assertEqual([start for start, _ in dk.mermaid_blocks(lines)], [7])
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        src, dest = os.path.join(d, "a.md"), os.path.join(d, "out", "a.md")
+        with open(src, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        self.assertEqual(run("mermaid-source", src, dest)[0], 0)
+        with open(dest) as fh:
+            self.assertEqual(fh.read(), "```mermaid\nflowchart LR\n  a --> b\n```\n\n")
+
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]

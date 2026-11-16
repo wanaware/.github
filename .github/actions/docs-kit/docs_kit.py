@@ -68,7 +68,7 @@ REF_DEF_RE = re.compile(
     r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*$')
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")  # underline of a Setext heading
-DEFINITION_RE = re.compile(r"^ {0,3}\[[^\]]+\]:")  # a link reference or footnote definition
+FOOTNOTE_DEF_RE = re.compile(r"^ {0,3}\[\^[^\]]+\]:")  # a footnote definition, any text after it
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")  # a span closes on the same run length
 FRONT_RE = re.compile(r"^<!--\s*docs-kit:(.*?)-->\s*$")
@@ -235,7 +235,7 @@ def heading_list(lines):
             out.append((para[0][0], 1 if text.strip()[0] == "=" else 2, " ".join(t for _, t in para)))
             para = []
         elif LIST_ITEM_RE.match(text) or text.lstrip().startswith(">") or \
-                (not para and DEFINITION_RE.match(text)):
+                (not para and (REF_DEF_RE.match(text) or FOOTNOTE_DEF_RE.match(text))):
             para = []  # not paragraph text, so an underline after it is a rule, not a heading
         else:
             para.append((i, text.strip()))

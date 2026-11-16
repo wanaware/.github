@@ -142,6 +142,9 @@ class MarkdownHelpersTest(unittest.TestCase):
         lines = ["Intro.", "", "[guide]: README.md", "---", "", "[^1]: A footnote.", "---", "",
                  "[ref]: x.md", "Real title", "=========="]
         self.assertEqual(dk.heading_list(lines), [(10, 1, "Real title")])
+        # Text that only looks like a definition is a paragraph, so it can be underlined.
+        self.assertEqual(dk.heading_list(["[Status]: not yet implemented", "==="]),
+                         [(1, 1, "[Status]: not yet implemented")])
 
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",

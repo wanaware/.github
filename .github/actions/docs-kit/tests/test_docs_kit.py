@@ -162,6 +162,18 @@ class MarkdownHelpersTest(unittest.TestCase):
         with open(os.path.join(d, "README.md"), "w") as fh:
             fh.write("[A][a], [b][], [C].\n\n[a]: a.md\n[b]: b.md\n[c]: c.md\n[unused]: d.md\n")
         self.assertEqual(sorted(dk.linked_paths(d, "README.md")), ["a.md", "b.md", "c.md"])
+        with open(os.path.join(d, "README.md"), "w") as fh:
+            fh.write("See the [Alpha\ndocs] page.\n\n[Alpha docs]: alpha.md\n")
+        self.assertEqual(sorted(dk.linked_paths(d, "README.md")), ["alpha.md"])
+
+    def test_headings_in_code_inside_block_quotes_are_not_anchors(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, "a.md")
+        with open(path, "w") as fh:
+            fh.write("> Example:\n>\n> ```markdown\n> ## Hidden\n> ```\n\n> ## Shown\n>\n> > ### Deeper\n")
+        dk._anchor_cache.clear()
+        self.assertEqual(sorted(dk.anchors_for(path)), ["deeper", "shown"])
 
     def test_definitions_are_not_setext_headings(self):
         lines = ["Intro.", "", "[guide]: README.md", "---", "", "[^1]: A footnote.", "---", "",

@@ -240,14 +240,27 @@ def heading_list(lines, nested=False):
     Setext (a paragraph underlined with === or ---), outside code and HTML comments.
 
     By default only headings that start a line count, as the document's own sections. With
-    nested, ATX headings indented up to three spaces or inside block quotes count too, since
-    GitHub gives them anchors as well."""
-    out, para = [], []
+    nested, ATX headings indented up to three spaces and headings inside block quotes count
+    too, since GitHub gives them anchors as well. A block quote's content is Markdown in its
+    own right, so it is read the same way (code fences inside it included)."""
+    out, para, quote = [], [], []
+
+    def flush_quote():
+        if quote:
+            inner = heading_list([t for _, t in quote], nested=True)
+            out.extend((quote[n - 1][0], level, title) for n, level, title in inner)
+            quote.clear()
+
     for i, text in visible_lines(lines, keep_code=True):
+        if nested and text is not None and re.match(r" {0,3}>", text):
+            quote.append((i, re.sub(r"^ {0,3}> ?", "", text)))
+            para = []
+            continue
+        flush_quote()
         if text is None or not text.strip():
             para = []
             continue
-        m = HEADING_RE.match(re.sub(r"^ {0,3}(?:> ?)*", "", text) if nested else text)
+        m = HEADING_RE.match(re.sub(r"^ {0,3}", "", text) if nested else text)
         if m:
             out.append((i, len(m.group(1)), m.group(2)))
             para = []
@@ -259,6 +272,7 @@ def heading_list(lines, nested=False):
             para = []  # not paragraph text, so an underline after it is a rule, not a heading
         else:
             para.append((i, text.strip()))
+    flush_quote()
     return out
 
 
@@ -329,14 +343,15 @@ def label_key(label):
 
 
 def used_labels(texts):
-    """Reference labels used by [text][label], [label][] or [label] links."""
+    """Reference labels used by [text][label], [label][] or [label] links, including labels
+    that wrap onto the next line of their paragraph."""
+    joined = "\n".join("" if REF_DEF_RE.match(t) else t for t in texts)
     used = set()
-    for text in texts:
-        if REF_DEF_RE.match(text):
-            continue
-        for m in REF_USE_RE.finditer(text):
-            label = (m.group(2) or m.group(1)) if m.group(1) is not None else m.group(3)
-            used.add(label_key(label))
+    for m in REF_USE_RE.finditer(joined):
+        if re.search(r"\n[ \t]*\n", m.group(0)):
+            continue  # brackets in different paragraphs
+        label = (m.group(2) or m.group(1)) if m.group(1) is not None else m.group(3)
+        used.add(label_key(label))
     return used
 
 

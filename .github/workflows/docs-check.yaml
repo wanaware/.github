@@ -1,10 +1,13 @@
 name: Documentation Check
 
-# Reusable PR gate for the WanAware standard documentation set (the docs kit in
-# .github/actions/docs-kit). Checks that every standard document exists with its template's title,
-# navigation bar, metadata line and H2 headings, that no template placeholders are left, that relative
-# links and anchors resolve and that diagrams follow the conventions, then renders the Mermaid diagrams
-# in the documents the pull request changes.
+# Reusable PR gate for the WanAware standard documentation set: the documentation templates and
+# rules of Asset Pipeline (wanaware/asset-pipeline), packaged as the docs kit in
+# .github/actions/docs-kit for any repository.
+#
+# Checks that every standard document exists with its template's title, navigation bar, metadata
+# line and H2 headings, that no template placeholders are left, that relative links and anchors
+# resolve and that diagrams follow the conventions, then renders the Mermaid diagrams in the
+# documents the pull request changes.
 #
 # Callers (see workflow-templates/documentation.yml):
 #

@@ -1,6 +1,7 @@
 name: Documentation Scaffold
 
-# Reusable workflow that deploys the WanAware standard documentation set (the docs kit in
+# Reusable workflow that deploys the WanAware standard documentation set (the documentation
+# templates and rules of Asset Pipeline, wanaware/asset-pipeline, packaged as the docs kit in
 # .github/actions/docs-kit) into the calling repository and opens a pull request with it:
 #
 #   - docs/templates/: the templates, the checker (docs_kit.py) and docs-kit.json (the repository's

@@ -1,4 +1,6 @@
-# Standard documentation for this repository, from the WanAware docs kit in wanaware/.github.
+# Standard documentation for this repository, from the WanAware docs kit in wanaware/.github:
+# the documentation templates and rules of Asset Pipeline (wanaware/asset-pipeline), packaged
+# for any repository.
 #
 #   - Pull requests into dev: checks the documentation (structure, placeholders, links, diagrams).
 #   - Merging this file into dev, or Actions → Documentation → Run workflow: opens a pull request that

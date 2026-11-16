@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """WanAware documentation kit: scaffold and check the standard documentation set.
 
+The standard is the one Asset Pipeline (wanaware/asset-pipeline) uses: its documents,
+templates and rules (docs/templates/service/, docs/10-documentation-standards.md), and this
+script generalizes its checker (scripts/check-docs.py) for any repository.
+
 Every repository documents itself with the same files: docs/README.md (overview and
 index), docs/01-architecture.md to docs/08-development.md, docs/09-glossary.md and
 docs/10-documentation-standards.md. In a monorepo, every service under the components

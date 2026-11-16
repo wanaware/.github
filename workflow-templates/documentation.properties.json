@@ -1,6 +1,6 @@
 {
   "name": "Documentation",
-  "description": "Deploy and check the WanAware standard documentation set: overview, architecture, data model, messaging, authentication, API, configuration, operations and development guides, with templates and a CI check.",
+  "description": "Deploy and check the WanAware standard documentation set, based on the Asset Pipeline documentation templates: overview, architecture, data model, messaging, authentication, API, configuration, operations and development guides, with templates and a CI check.",
   "iconName": "octicon book",
   "categories": ["Automation", "Markdown"]
 }

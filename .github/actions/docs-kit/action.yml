@@ -1,6 +1,9 @@
 name: 'Documentation kit'
-description: 'Scaffold or check the WanAware standard documentation set (docs/, and <services>/<service>/docs/ in monorepos)'
+description: 'Scaffold or check the WanAware standard documentation set, based on the Asset Pipeline documentation templates (docs/, and <services>/<service>/docs/ in monorepos)'
 
+# The documentation set, its templates and its checker come from Asset Pipeline
+# (wanaware/asset-pipeline: docs/templates/service/, docs/10-documentation-standards.md,
+# scripts/check-docs.py); README.md in this directory lists what each file comes from.
 # Used by the reusable workflows docs-check.yaml and docs-scaffold.yaml. Needs python3 on the
 # runner (the workflows install it with actions/setup-python). See README.md in this directory.
 

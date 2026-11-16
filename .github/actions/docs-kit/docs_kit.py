@@ -260,9 +260,9 @@ def anchors_for(path):
 
 
 def relative_links(lines):
-    """Yield (lineno, target) for every relative link, image and reference definition outside code."""
-    for lineno, line in outside_fences(lines):
-        text = INLINE_CODE_RE.sub("", line)
+    """Yield (lineno, target) for every relative link, image and reference definition outside code
+    and HTML comments (readers cannot see or follow a link in a comment)."""
+    for lineno, text in prose(lines):
         targets = [m.group(1) if m.group(1) is not None else m.group(2) for m in LINK_RE.finditer(text)]
         ref = REF_DEF_RE.match(text)
         if ref:

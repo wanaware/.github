@@ -124,6 +124,11 @@ class MarkdownHelpersTest(unittest.TestCase):
         line = "Write `` [sample](missing.md) `` or `[x](y.md)`, but [real](real.md) is a link."
         self.assertEqual([t for _, t in dk.relative_links([line])], ["real.md"])
 
+    def test_links_inside_html_comments_are_not_checked(self):
+        lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
+                 "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]
+        self.assertEqual([t for _, t in dk.relative_links(lines)], ["real.md", "live.md"])
+
     def test_link_destinations(self):
         lines = ["[a](../schema(v2).graphql) [b](<path with spaces.md>) [c](x.md \"title\")",
                  "[ref]: ../defs.md \"title\"", "[^1]: a footnote, not a link", "[e](https://example.com)"]

@@ -220,6 +220,11 @@ class MarkdownHelpersTest(unittest.TestCase):
         self.assertEqual([line for line, _ in dk.lint_mermaid(lines)], [9])
         # A stray mid-line "<!--" is text: it does not hide later diagrams.
         self.assertEqual([line for line, _ in dk.lint_mermaid(["Use a <!-- marker.", "", "```mermaid", "graph TD", "```"])], [4])
+        # Inside a list item a comment is indented relative to the item's content.
+        nested = ["- A bullet.", "", "    <!--", "    ```mermaid", "    graph TD", "    ```", "    -->", "", "Text."]
+        self.assertEqual(dk.lint_mermaid(nested), [])
+        # Indented four spaces outside a list it is code, not a comment: the fence there is not hidden.
+        self.assertEqual(visible("    <!--\n```\ncode\n```\nafter"), [1, 5])
         # Comment markers inside a real code block are code.
         self.assertEqual(visible("```html\n<!-- a\n```\nafter"), [4])
 

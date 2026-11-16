@@ -123,24 +123,19 @@ def scan(lines):
       indented at most three spaces beyond the opening fence's container, with
       nothing after it. A four-backtick example may therefore contain
       triple-backtick fences.
-    - An HTML comment that starts a line (up to three spaces in) runs to the line
-      containing "-->", and nothing inside it is a fence, as GitHub hides it all.
+    - An HTML comment that starts a line (indented like a fence, so within a list item
+      relative to its content) runs to the line containing "-->", and nothing inside it
+      is a fence, as GitHub hides it all.
     """
     fence = None  # (character, length, container offset, info) of the open fence
     containers = []  # content offsets of the enclosing list items
     html_comment = False  # inside an HTML comment that started a line (GitHub hides it, fences too)
     for i, line in enumerate(lines, 1):
         text = line.expandtabs(4)
-        if fence is None:
-            if html_comment:
-                html_comment = "-->" not in text
-                yield i, line, None, False
-                continue
-            opener = re.match(r" {0,3}<!--", text)
-            if opener and "-->" not in text[opener.end():]:
-                html_comment = True
-                yield i, line, None, False
-                continue
+        if fence is None and html_comment:
+            html_comment = "-->" not in text
+            yield i, line, None, False
+            continue
         indent = len(text) - len(text.lstrip(" "))
         m = FENCE_RE.match(text)
         if fence is not None:
@@ -164,6 +159,12 @@ def scan(lines):
                 containers.append(pos)
                 item = LIST_ITEM_RE.match(text[pos:]) if 1 <= gap <= 4 else None
         base = containers[-1] if containers else 0
+        # An HTML comment block opens like a fence: at most three spaces beyond the container.
+        opener = re.match(r" *<!--", text)
+        if opener and indent <= base + 3 and "-->" not in text[opener.end():]:
+            html_comment = True
+            yield i, line, None, False
+            continue
         if m and indent <= base + 3 and not (m.group(2)[0] == "`" and "`" in m.group(3)):
             fence = (m.group(2)[0], len(m.group(2)), base, m.group(3).strip())
             yield i, line, fence[3], True

@@ -26,8 +26,7 @@ Cover what applies to every service; each service's 08-development.md covers its
 ├── .github/workflows/      CI/CD
 ├── docs/                   Platform documentation (this directory)
 │   └── templates/          Documentation kit: templates, settings and checker
-└── {{COMPONENTS_DIR}}/
-    └── <service>/          One directory per service, each with its own docs/
+└── {{COMPONENTS_DIR}}/               One directory per service, each with its own docs/
 ```
 
 ## 3. Dependencies and private modules

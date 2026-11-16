@@ -113,6 +113,24 @@ class MarkdownHelpersTest(unittest.TestCase):
         for token in ("<one line>", "<service>", "<name>", "<a placeholder>"):
             self.assertTrue(dk.is_placeholder(token), token)
 
+    def test_mermaid_stroke_colours_are_rejected_but_widths_and_dashes_are_not(self):
+        doc = "\n".join(["```mermaid", "flowchart LR", "  a --> b",
+                          "  classDef focus stroke:#ffffff", "  classDef ok stroke-width:3px",
+                          "  classDef ext stroke-dasharray:4 3", "  classDef bg background-color:#000", "```"])
+        found = dk.lint_mermaid(doc.split("\n"))
+        self.assertEqual([line for line, _ in found], [4, 7])
+
+    def test_double_backtick_code_spans_hide_their_contents(self):
+        line = "Write `` [sample](missing.md) `` or `[x](y.md)`, but [real](real.md) is a link."
+        self.assertEqual([t for _, t in dk.relative_links([line])], ["real.md"])
+
+    def test_link_destinations(self):
+        lines = ["[a](../schema(v2).graphql) [b](<path with spaces.md>) [c](x.md \"title\")",
+                 "[ref]: ../defs.md \"title\"", "[^1]: a footnote, not a link", "[e](https://example.com)"]
+        self.assertEqual([t for _, t in dk.relative_links(lines)],
+                         ["../schema(v2).graphql", "path with spaces.md", "x.md", "../defs.md"])
+        self.assertEqual(dk.split_target("../a%20b.md?raw=1#caf%C3%A9"), ("../a b.md", "café"))
+
     def test_mermaid_lint(self):
         doc = "\n".join([
             "```mermaid", "graph TD", "  a --> b", "```",
@@ -332,6 +350,40 @@ class SingleLayoutTest(RepoTestCase):
         self.assertEqual(list(dk.placeholder_tokens(["a <wrapped", "placeholder> b", "", "x < y", "", "z > w"])),
                          [(1, "<wrapped placeholder>")])
 
+    def test_links_resolve_with_parentheses_queries_encoded_fragments_and_references(self):
+        self.scaffold()
+        self.fill_all()
+        self.write("schema(v2).graphql", "type Query\n")
+        self.write("docs/01-architecture.md", self.read("docs/01-architecture.md") + "\n".join([
+            "", "### Café", "",
+            "[s](../schema(v2).graphql) [raw](../schema(v2).graphql?raw=1) [c](#caf%C3%A9) [d][defs]",
+            "Literal example: `` [sample](missing.md) ``", "", "[defs]: 02-data-model.md#1-overview", ""]))
+        self.assertEqual(self.errors(self.check()), [])
+        self.write("docs/01-architecture.md", self.read("docs/01-architecture.md") + "\n[gone]: ../missing.yaml\n")
+        self.assertEqual(self.errors(self.check()), [("LINK", "docs/01-architecture.md")])
+
+    def test_impossible_dates_fail(self):
+        self.scaffold()
+        self.fill_all()
+        for date in ("2026-02-31", "2026-99-99"):
+            with self.subTest(date=date):
+                text = self.read("docs/02-data-model.md")
+                self.write("docs/02-data-model.md", re.sub(r"\d{4}-\d{2}-\d{2}", date, text, count=1))
+                self.assertEqual(self.errors(self.check()), [("META", "docs/02-data-model.md")])
+
+    def test_template_placeholders_in_code_blocks_are_reported(self):
+        self.scaffold()
+        template = self.read("docs/08-development.md")
+        self.assertIn("<entry points>", template)
+        self.fill_all()
+        filled = self.read("docs/08-development.md")
+        self.write("docs/08-development.md", filled.replace("cmd/            filled", "cmd/            <entry points>"))
+        found = [(code, msg) for level, code, path, _, msg in self.check().items if level == "error"]
+        self.assertEqual(found, [("PLACEHOLDER", "placeholder <entry points> not filled in (in a code block)")])
+        # A document's own <angle> examples in code are not template text.
+        self.write("docs/08-development.md", filled + "\n```bash\ncd services/<service>\n```\n")
+        self.assertEqual(self.errors(self.check()), [])
+
     def test_check_without_adoption(self):
         code, out = run("--root", self.root, "check")
         self.assertEqual(code, 1)
@@ -382,6 +434,16 @@ class MonorepoLayoutTest(RepoTestCase):
         self.scaffold()  # adds gamma's docs; docs/README.md exists, so it is not rewritten
         self.fill_all()
         self.assertEqual({code for code, _ in self.errors(self.check())}, {"UNLINKED"})
+
+    def test_services_linked_through_reference_definitions_count(self):
+        self.scaffold()
+        self.fill_all()
+        readme = self.read("docs/README.md")
+        for label in ("docs", "README"):
+            readme = readme.replace(f"[{label}](../services/alpha/docs/README.md)", f"[{label}][alpha]")
+        self.assertNotIn("(../services/alpha/docs/README.md)", readme)
+        self.write("docs/README.md", readme + "\n[alpha]: ../services/alpha/docs/README.md\n")
+        self.assertEqual(self.errors(self.check()), [])
 
     def test_excluded_directories_are_skipped(self):
         self.scaffold()

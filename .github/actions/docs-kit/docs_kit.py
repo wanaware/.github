@@ -23,6 +23,7 @@ Standard library only; Python 3.9 or later.
 """
 import argparse
 import bisect
+import datetime
 import json
 import os
 import posixpath
@@ -52,10 +53,18 @@ DEFAULTS = {
 STANDARD_RE = re.compile(r"^(README|\d\d-[a-z0-9-]+)\.md$")
 FENCE_RE = re.compile(r"^( *)(`{3,}|~{3,})(.*)$")
 LIST_ITEM_RE = re.compile(r"^( *)([-+*]|\d{1,9}[.)])( +|$)")
-LINK_RE = re.compile(r'!?\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)')
+# [text](destination "title"): the destination is <anything> or text with balanced parentheses.
+LINK_RE = re.compile(
+    r'!?\[(?:[^\[\]]|\[[^\]]*\])*\]'
+    r'\(\s*(?:<([^<>\n]*)>|((?:[^()\s]|\([^()\s]*\))+))'
+    r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*\)')
+# [label]: destination "title" (a reference definition; [^label] is a footnote, not a link).
+REF_DEF_RE = re.compile(
+    r'^ {0,3}\[(?!\^)[^\]]+\]:\s*(?:<([^<>\n]*)>|(\S+))'
+    r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*$')
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
-INLINE_CODE_RE = re.compile(r"`[^`]*`")
+INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")  # a span closes on the same run length
 FRONT_RE = re.compile(r"^<!--\s*docs-kit:(.*?)-->\s*$")
 ATTR_RE = re.compile(r'([a-z][a-z-]*)(?:="([^"]*)")?')
 TOKEN_RE = re.compile(r"\{\{([A-Z_]+)\}\}")
@@ -74,6 +83,7 @@ HTML_TAGS = {
 }
 MERMAID_TYPES = ("flowchart", "sequenceDiagram", "classDiagram", "erDiagram", "stateDiagram-v2")
 MERMAID_FORBIDDEN = re.compile(r"^\s*(click|style|linkStyle)\b")
+MERMAID_COLOUR = re.compile(r"(?<![\w-])(fill|color|stroke|background(?:-color)?)\s*:")
 
 
 class KitError(Exception):
@@ -250,12 +260,22 @@ def anchors_for(path):
 
 
 def relative_links(lines):
-    """Yield (lineno, target) for every relative Markdown link or image outside code."""
+    """Yield (lineno, target) for every relative link, image and reference definition outside code."""
     for lineno, line in outside_fences(lines):
-        for m in LINK_RE.finditer(INLINE_CODE_RE.sub("", line)):
-            target = m.group(1)
-            if not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
+        text = INLINE_CODE_RE.sub("", line)
+        targets = [m.group(1) if m.group(1) is not None else m.group(2) for m in LINK_RE.finditer(text)]
+        ref = REF_DEF_RE.match(text)
+        if ref:
+            targets.append(ref.group(1) if ref.group(1) is not None else ref.group(2))
+        for target in targets:
+            if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
                 yield lineno, target
+
+
+def split_target(target):
+    """Return the decoded (path, fragment) of a link destination, without its query string."""
+    path, _, fragment = target.partition("#")
+    return unquote(path.partition("?")[0]), unquote(fragment)
 
 
 def is_placeholder(token):
@@ -559,8 +579,12 @@ def meta_problem(want, got):
     if rest.startswith(DATE_TOKEN) or SHA_TOKEN in rest:
         return ("PLACEHOLDER", "metadata line still has the date or commit placeholder; "
                                "fill in when and against which commit the page was verified")
-    if not DATE_RE.match(rest):
-        return ("META", "metadata line needs a YYYY-MM-DD date after 'Last verified against source:'")
+    try:
+        if not DATE_RE.match(rest):
+            raise ValueError
+        datetime.date.fromisoformat(rest[:10])
+    except ValueError:
+        return ("META", "metadata line needs a real YYYY-MM-DD date after 'Last verified against source:'")
     return None
 
 
@@ -582,7 +606,21 @@ def placeholder_findings(want_text, lines):
     for i, token in placeholder_tokens(lines):
         if token in wanted:
             found.append((i, f"placeholder {token} not filled in"))
+    # Code blocks hold examples, so only the placeholders the template itself puts in one count.
+    wanted = {token for _, token in code_placeholder_tokens(want_text.split("\n"))}
+    for i, token in code_placeholder_tokens(lines):
+        if token in wanted:
+            found.append((i, f"placeholder {token} not filled in (in a code block)"))
     return sorted(set(found))
+
+
+def code_placeholder_tokens(lines):
+    """Yield (lineno, token) for every <placeholder> inside fenced code blocks."""
+    for i, line, info, delimiter in scan(lines):
+        if info is not None and not delimiter:
+            for token in re.findall(r"<[^<>\n]+>", line):
+                if is_placeholder(token):
+                    yield i, token
 
 
 def placeholder_tokens(lines):
@@ -612,8 +650,9 @@ def lint_mermaid(lines):
                 found.append((i, "no %%{init}%% directives or themes in diagrams"))
             if MERMAID_FORBIDDEN.match(l):
                 found.append((i, f"no '{l.split()[0]}' statements in diagrams (no click handlers or colours)"))
-            if l.strip().startswith("classDef") and re.search(r"\b(fill|color)\s*:", l):
-                found.append((i, "classDef must not set colours (fill/color); use stroke-width or stroke-dasharray"))
+            if l.strip().startswith("classDef") and MERMAID_COLOUR.search(l):
+                found.append((i, "classDef must not set colours (fill, color, stroke); "
+                                 "use stroke-width or stroke-dasharray"))
         if not meaningful:
             found.append((start, "empty Mermaid diagram"))
             continue
@@ -684,8 +723,8 @@ def check_links(root, rel, template_lines, report, lenient):
     checked = 0
     for lineno, target in relative_links(lines):
         checked += 1
-        path_part, _, frag = target.partition("#")
-        dest = path if not path_part else os.path.normpath(os.path.join(base, unquote(path_part)))
+        path_part, frag = split_target(target)
+        dest = path if not path_part else os.path.normpath(os.path.join(base, path_part))
         problem = None
         if not os.path.exists(dest):
             problem = ("LINK", f"{target} (not found)")
@@ -706,9 +745,9 @@ def linked_paths(root, rel):
     path = os.path.join(root, rel)
     out = set()
     for _, target in relative_links(read_lines(path)):
-        part = target.partition("#")[0]
+        part = split_target(target)[0]
         if part:
-            dest = os.path.normpath(os.path.join(os.path.dirname(path), unquote(part)))
+            dest = os.path.normpath(os.path.join(os.path.dirname(path), part))
             out.add(os.path.relpath(dest, root).replace(os.sep, "/"))
     return out
 

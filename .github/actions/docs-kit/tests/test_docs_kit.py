@@ -35,7 +35,8 @@ def run(*argv):
 
 
 def fill(text):
-    """Do what an author does to a scaffolded page: fill every placeholder, drop the comments."""
+    """Do what an author does to a scaffolded page: fill every placeholder, including those
+    that wrap onto several lines, and drop the comments."""
     text = dk.COMMENT_RE.sub("", text)
     text = text.replace(dk.DATE_TOKEN, "2026-11-16").replace(dk.SHA_TOKEN, "abc1234")
     return dk.ANGLE_RE.sub(lambda m: "filled" if dk.is_placeholder(m.group(0)) else m.group(0), text)
@@ -308,6 +309,28 @@ class SingleLayoutTest(RepoTestCase):
         report = self.check()
         self.assertEqual(self.errors(report), [])
         self.assertIn("STALE", [code for _, code, _, _, _ in report.items])
+
+    def test_placeholders_that_wrap_onto_several_lines_are_reported(self):
+        self.scaffold()
+        template = self.read("docs/01-architecture.md")
+        wrapped = re.search(r"<Architectural style[^>]*>", template).group(0)
+        self.assertIn("\n", wrapped)  # the template wraps it onto two lines
+        self.fill_all()
+        arch = self.read("docs/01-architecture.md")
+        for leftover in (wrapped, " ".join(wrapped.split())):  # as scaffolded, and re-wrapped
+            with self.subTest(leftover=leftover[:30]):
+                self.write("docs/01-architecture.md", arch.replace("## 2. System context",
+                                                                    leftover + "\n\n## 2. System context"))
+                found = [(code, line) for level, code, path, line, msg in self.check().items
+                         if level == "error" and path == "docs/01-architecture.md"]
+                self.assertEqual([code for code, _ in found], ["PLACEHOLDER"])
+                lines = self.read("docs/01-architecture.md").split("\n")
+                self.assertTrue(lines[found[0][1] - 1].startswith("<Architectural style"))
+
+    def test_angle_brackets_in_different_paragraphs_are_not_a_placeholder(self):
+        self.assertFalse(dk.is_placeholder("< 5 items.\n\nThen more than >"))
+        self.assertEqual(list(dk.placeholder_tokens(["a <wrapped", "placeholder> b", "", "x < y", "", "z > w"])),
+                         [(1, "<wrapped placeholder>")])
 
     def test_check_without_adoption(self):
         code, out = run("--root", self.root, "check")

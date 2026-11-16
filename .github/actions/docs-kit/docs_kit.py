@@ -22,6 +22,7 @@ keeps the copy current. Exit code 0 when everything passes.
 Standard library only; Python 3.9 or later.
 """
 import argparse
+import bisect
 import json
 import os
 import posixpath
@@ -61,7 +62,7 @@ TOKEN_RE = re.compile(r"\{\{([A-Z_]+)\}\}")
 COND_RE = re.compile(r"^\s*\{\{([#/])(single|monorepo)\}\}\s*$")
 INLINE_COND_RE = re.compile(r"\{\{#(single|monorepo)\}\}(.*?)\{\{/\1\}\}")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
-ANGLE_RE = re.compile(r"<[^<>\n]+>")
+ANGLE_RE = re.compile(r"<[^<>]+>")  # may wrap onto following lines; see placeholder_tokens
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 DATE_TOKEN = "YYYY-MM-DD"
 SHA_TOKEN = "<short-sha>"
@@ -260,6 +261,8 @@ def relative_links(lines):
 def is_placeholder(token):
     inner = token[1:-1].strip()
     if not inner or inner[0] in "/!" or re.match(r"^[a-z][a-z0-9+.-]*:", inner, re.I):
+        return False
+    if re.search(r"\n[ \t]*\n", inner):  # a "<" and a ">" in different paragraphs
         return False
     tag = re.match(r"[A-Za-z][A-Za-z0-9-]*", inner)
     if not tag or tag.group(0).lower() not in HTML_TAGS:
@@ -575,13 +578,28 @@ def placeholder_findings(want_text, lines):
         if at >= 0:
             found.append((text.count("\n", 0, at) + 1, "template guidance comment left in: "
                           + " ".join(comment[4:-3].split())[:60] + "…"))
-    wanted = set()
-    for _, line in prose(want_text.split("\n")):
-        wanted.update(t for t in ANGLE_RE.findall(line) if is_placeholder(t))
-    for i, line in prose(lines):
-        for token in sorted(set(ANGLE_RE.findall(line)) & wanted):
+    wanted = {token for _, token in placeholder_tokens(want_text.split("\n"))}
+    for i, token in placeholder_tokens(lines):
+        if token in wanted:
             found.append((i, f"placeholder {token} not filled in"))
-    return sorted(found)
+    return sorted(set(found))
+
+
+def placeholder_tokens(lines):
+    """Yield (lineno, token) for every <placeholder> in prose (outside code and comments).
+
+    A placeholder may wrap onto following lines of its paragraph; the token is returned
+    with its whitespace collapsed, so it matches however the lines are wrapped."""
+    numbered = list(prose(lines))
+    starts, offset = [], 0
+    for _, text in numbered:
+        starts.append(offset)
+        offset += len(text) + 1
+    joined = "\n".join(text for _, text in numbered)
+    for m in ANGLE_RE.finditer(joined):
+        if is_placeholder(m.group(0)):
+            lineno = numbered[bisect.bisect_right(starts, m.start()) - 1][0]
+            yield lineno, " ".join(m.group(0).split())
 
 
 def lint_mermaid(lines):

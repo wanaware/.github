@@ -141,8 +141,10 @@ jobs:
           layout=$(python3 -c 'import json; print(json.load(open("docs/templates/docs-kit.json"))["layout"])')
           if [ "$layout" = "monorepo" ]; then
             components=$(python3 -c 'import json; print(json.load(open("docs/templates/docs-kit.json"))["components_dir"])')
+            # grep exits 1 when no service documentation changed (for example a refresh that only
+            # touches docs/); that is not an error, but pipefail would end the step on it.
             git ls-files -z --others --modified --exclude-standard -- "$components" \
-              | grep -z '/docs/' | xargs -0 -r git add --
+              | { grep -z '/docs/' || [ $? -eq 1 ]; } | xargs -0 -r git add --
           fi
           if git diff --cached --quiet; then
             echo "The documentation is already up to date; nothing to commit."

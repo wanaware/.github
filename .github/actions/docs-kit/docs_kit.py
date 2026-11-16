@@ -123,11 +123,24 @@ def scan(lines):
       indented at most three spaces beyond the opening fence's container, with
       nothing after it. A four-backtick example may therefore contain
       triple-backtick fences.
+    - An HTML comment that starts a line (up to three spaces in) runs to the line
+      containing "-->", and nothing inside it is a fence, as GitHub hides it all.
     """
     fence = None  # (character, length, container offset, info) of the open fence
     containers = []  # content offsets of the enclosing list items
+    html_comment = False  # inside an HTML comment that started a line (GitHub hides it, fences too)
     for i, line in enumerate(lines, 1):
         text = line.expandtabs(4)
+        if fence is None:
+            if html_comment:
+                html_comment = "-->" not in text
+                yield i, line, None, False
+                continue
+            opener = re.match(r" {0,3}<!--", text)
+            if opener and "-->" not in text[opener.end():]:
+                html_comment = True
+                yield i, line, None, False
+                continue
         indent = len(text) - len(text.lstrip(" "))
         m = FENCE_RE.match(text)
         if fence is not None:
@@ -235,43 +248,13 @@ def prose(lines):
             yield i, text
 
 
-def commented_fences(lines):
-    """Line numbers of fence openings that sit inside an HTML comment (hidden on GitHub)."""
-    hidden, in_comment = set(), False
-    for i, line, info, delimiter in scan(lines):
-        if info is not None:
-            if delimiter and in_comment:
-                hidden.add(i)
-            continue
-        rest = line
-        while rest:
-            if in_comment:
-                end = rest.find("-->")
-                rest, in_comment = ("", True) if end < 0 else (rest[end + 3:], False)
-                continue
-            start = rest.find("<!--")
-            code = INLINE_CODE_RE.search(rest)
-            if code and (start < 0 or code.start() < start):
-                rest = rest[code.end():]
-            elif start < 0:
-                rest = ""
-            else:
-                rest, in_comment = rest[start + 4:], True
-    return hidden
-
-
 def mermaid_blocks(lines):
     """Return [(first_lineno, [(lineno, line), ...])] for every visible ```mermaid block
-    (one inside an HTML comment is hidden on GitHub, so it is left out)."""
-    blocks, current, hidden = [], None, commented_fences(lines)
+    (scan() does not see fences inside HTML comments, which GitHub hides)."""
+    blocks, current = [], None
     for i, line, info, delimiter in scan(lines):
         is_mermaid = info is not None and info.split()[:1] == ["mermaid"]
-        if delimiter and is_mermaid and current is None and i in hidden:
-            current = "hidden"
-        elif current == "hidden":
-            if delimiter:
-                current = None
-        elif delimiter and is_mermaid and current is None:
+        if delimiter and is_mermaid and current is None:
             current = (i, [])
         elif delimiter and current is not None:
             blocks.append(current)

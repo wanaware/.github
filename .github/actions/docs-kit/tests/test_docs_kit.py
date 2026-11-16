@@ -213,6 +213,16 @@ class MarkdownHelpersTest(unittest.TestCase):
         with open(dest) as fh:
             self.assertEqual(fh.read(), "```mermaid\nflowchart LR\n  a --> b\n```\n\n")
 
+    def test_fences_inside_html_comments_are_not_fences(self):
+        # An unclosed fence inside a comment neither crashes nor hides the rest of the document.
+        lines = ["<!--", "```mermaid", "graph TD", "-->", "", "[x](x.md)", "", "```mermaid", "graph LR", "```"]
+        self.assertEqual([t for _, t in dk.relative_links(lines)], ["x.md"])
+        self.assertEqual([line for line, _ in dk.lint_mermaid(lines)], [9])
+        # A stray mid-line "<!--" is text: it does not hide later diagrams.
+        self.assertEqual([line for line, _ in dk.lint_mermaid(["Use a <!-- marker.", "", "```mermaid", "graph TD", "```"])], [4])
+        # Comment markers inside a real code block are code.
+        self.assertEqual(visible("```html\n<!-- a\n```\nafter"), [4])
+
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]

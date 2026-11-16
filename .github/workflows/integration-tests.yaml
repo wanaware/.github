@@ -9,9 +9,14 @@ on:
         default: ""
         type: string
       go_version:
-        description: "Go version to use"
+        description: "Go version to use. The default names a minor release so each run picks up its latest security patch."
         required: false
-        default: "1.24.6"
+        default: "1.27"
+        type: string
+      python_version:
+        description: "Python version for the test helper scripts"
+        required: false
+        default: "3.14"
         type: string
       server_cmd:
         description: "Go main file to run the server (e.g. ./cmd/fleet-manager/main.go). Not required when using multi_service."
@@ -153,7 +158,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Runtime values are already in this job's environment. The ARC runner image's
       # job-started hook resolves this repo to its own <svc>-env Secret — materialised
@@ -224,18 +229,21 @@ jobs:
           echo "NATS_NKEY_SEED_FILE=$PWD/nats-nkey.seed" >> "$GITHUB_ENV"
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ inputs.go_version }}
+          # Resolve against the published manifest so an older patch already in the
+          # runner's tool cache doesn't win over the current security release.
+          check-latest: true
 
       - name: Authenticate with GCP
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
@@ -266,12 +274,16 @@ jobs:
       - name: Start Local NATS Server
         if: ${{ inputs.use_nats }}
         run: |
-          NATS_VERSION="v2.10.18"
-          sudo apt-get install -y unzip
+          set -euo pipefail
+          NATS_VERSION="v2.15.3"
+          # From the release's SHA256SUMS. Pinned here so a replaced release asset fails
+          # the job instead of running. Update it together with NATS_VERSION.
+          NATS_SHA256="32e18c1e78d7ef4f86e483070eef3abb2647c3d4d67e29668077c7ad81da0797"
           curl -sSfL \
-            "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.zip" \
-            -o nats-server.zip
-          unzip -o nats-server.zip
+            "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" \
+            -o nats-server.tar.gz
+          echo "${NATS_SHA256}  nats-server.tar.gz" | sha256sum --check --strict
+          tar -xzf nats-server.tar.gz
           chmod +x nats-server-${NATS_VERSION}-linux-amd64/nats-server
           sudo mv nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
           JS_FLAGS=""
@@ -305,7 +317,7 @@ jobs:
       # Adds /etc/hosts entry so TLS cert verification passes (cert SAN = nats.nats.svc).
       - name: Get GKE credentials for NATS tunnel
         if: ${{ inputs.use_nats_port_forward }}
-        uses: google-github-actions/get-gke-credentials@v2
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
         with:
           cluster_name: ${{ env.CLUSTER_NAME }}
           location: ${{ env.CLUSTER_REGION }}
@@ -381,7 +393,7 @@ jobs:
       # replayed against the Kubernetes API server.
       - name: Get GKE credentials for Vault
         if: ${{ inputs.use_vault }}
-        uses: google-github-actions/get-gke-credentials@v2
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
         with:
           cluster_name: ${{ env.CLUSTER_NAME }}
           location: ${{ env.CLUSTER_REGION }}
@@ -451,7 +463,7 @@ jobs:
       # uses for kubectl rollout restart.
       - name: Get GKE credentials for DB tunnel
         if: ${{ inputs.use_cloud_sql }}
-        uses: google-github-actions/get-gke-credentials@v2
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
         with:
           cluster_name: ${{ env.CLUSTER_NAME }}
           location: ${{ env.CLUSTER_REGION }}
@@ -508,7 +520,7 @@ jobs:
 
       # --- Build and start Go server ---
       - name: Authenticate to GCP as Application SA
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ inputs.ci_app_runtime_sa_email }}
@@ -590,12 +602,12 @@ jobs:
 
       # --- Newman tests ---
       - name: Install Newman
-        run: npm install -g newman
+        run: npm install -g --ignore-scripts newman@6.2.3
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.8"
+          python-version: ${{ inputs.python_version }}
 
       - name: Install pip and dependencies
         working-directory: ${{ inputs.working_directory }}

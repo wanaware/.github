@@ -183,6 +183,16 @@ class MarkdownHelpersTest(unittest.TestCase):
         self.assertEqual(dk.heading_list(["[Status]: not yet implemented", "==="]),
                          [(1, 1, "[Status]: not yet implemented")])
 
+    def test_links_that_wrap_onto_the_next_line(self):
+        links = lambda lines: [(n, t) for n, t in dk.relative_links(lines)]
+        self.assertEqual(links(["See the [architecture", "guide](a.md) and [b](", "b.md)."]),
+                         [(1, "a.md"), (2, "b.md")])
+        self.assertEqual(links(["![a diagram of", "the flow](flow.png)"]), [(1, "flow.png")])
+        # A line break between "]" and "(" ends the link text: not a link, as on GitHub.
+        self.assertEqual(links(["See [the guide]", "(missing.md)."]), [])
+        # Brackets in different paragraphs never form a link.
+        self.assertEqual(links(["An open [bracket.", "", "Later](x.md)"]), [])
+
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]

@@ -361,14 +361,26 @@ def relative_links(lines, unused_definitions=True):
     unused_definitions, definitions that no link uses (and so render nothing) are left out."""
     entries = list(prose(lines))
     used = None if unused_definitions else used_labels(text for _, text in entries)
+    found = []  # (lineno, order, target)
+    # Inline links and images may wrap onto the next lines of their paragraph.
+    starts, offset = [], 0
+    for _, text in entries:
+        starts.append(offset)
+        offset += len(text) + 1
+    joined = "\n".join(text for _, text in entries)
+    for m in LINK_RE.finditer(joined):
+        if re.search(r"\n[ \t]*\n", m.group(0)):
+            continue  # a "[" and a "](" in different paragraphs
+        lineno = entries[bisect.bisect_right(starts, m.start()) - 1][0]
+        found.append((lineno, m.start(), m.group(1) if m.group(1) is not None else m.group(2)))
     for lineno, text in entries:
-        targets = [m.group(1) if m.group(1) is not None else m.group(2) for m in LINK_RE.finditer(text)]
         ref = REF_DEF_RE.match(text)
         if ref and (used is None or label_key(re.match(r" {0,3}\[([^\]]+)\]", text).group(1)) in used):
-            targets.append(ref.group(1) if ref.group(1) is not None else ref.group(2))
-        for target in targets:
-            if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
-                yield lineno, target
+            found.append((lineno, offset, ref.group(1) if ref.group(1) is not None else ref.group(2)))
+    for lineno, _, target in sorted(found):
+        target = " ".join(target.split()) if target else target
+        if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
+            yield lineno, target
 
 
 def resolve(root, base, path):

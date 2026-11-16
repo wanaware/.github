@@ -138,6 +138,11 @@ class MarkdownHelpersTest(unittest.TestCase):
                          [(1, 1, "Title"), (4, 2, "Section `code`"), (7, 2, "ATX section")])
         self.assertEqual(dk.headings(lines, 2), ["Section `code`", "ATX section"])
 
+    def test_definitions_are_not_setext_headings(self):
+        lines = ["Intro.", "", "[guide]: README.md", "---", "", "[^1]: A footnote.", "---", "",
+                 "[ref]: x.md", "Real title", "=========="]
+        self.assertEqual(dk.heading_list(lines), [(10, 1, "Real title")])
+
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]

@@ -68,6 +68,7 @@ REF_DEF_RE = re.compile(
     r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*$')
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")  # underline of a Setext heading
+REF_USE_RE = re.compile(r"\[([^\[\]]+)\]\[([^\[\]]*)\]|\[([^\[\]]+)\](?![\[(:])")  # [t][l], [l][], [l]
 FOOTNOTE_DEF_RE = re.compile(r"^ {0,3}\[\^[^\]]+\]:")  # a footnote definition, any text after it
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")  # a span closes on the same run length
@@ -175,6 +176,7 @@ def visible_lines(lines, keep_code=False):
             yield i, None
             continue
         out, rest = "", line
+        block_start = re.match(r" {0,3}<!--", line) is not None
         while rest:
             if in_comment:
                 end = rest.find("-->")
@@ -190,9 +192,23 @@ def visible_lines(lines, keep_code=False):
                 rest = rest[code.end():]
             elif start < 0:
                 out, rest = out + rest, ""
-            else:
+            elif (block_start and not out) or comment_closes(lines, i, rest[start + 4:]):
                 out, rest, in_comment = out + rest[:start], rest[start + 4:], True
+            else:  # a stray "<!--" inside a paragraph is text, as on GitHub
+                out, rest = out + rest[:start + 4], rest[start + 4:]
         yield i, out
+
+
+def comment_closes(lines, lineno, rest):
+    """Whether an inline comment opened on line lineno closes before its paragraph ends."""
+    if "-->" in rest:
+        return True
+    for line in lines[lineno:]:
+        if not line.strip():
+            return False
+        if "-->" in line:
+            return True
+    return False
 
 
 def prose(lines):
@@ -219,15 +235,19 @@ def mermaid_blocks(lines):
     return blocks
 
 
-def heading_list(lines):
+def heading_list(lines, nested=False):
     """[(lineno, level, text)] for the headings GitHub renders, in order: ATX (# Title) and
-    Setext (a paragraph underlined with === or ---), outside code and HTML comments."""
+    Setext (a paragraph underlined with === or ---), outside code and HTML comments.
+
+    By default only headings that start a line count, as the document's own sections. With
+    nested, ATX headings indented up to three spaces or inside block quotes count too, since
+    GitHub gives them anchors as well."""
     out, para = [], []
     for i, text in visible_lines(lines, keep_code=True):
         if text is None or not text.strip():
             para = []
             continue
-        m = HEADING_RE.match(text)
+        m = HEADING_RE.match(re.sub(r"^ {0,3}(?:> ?)*", "", text) if nested else text)
         if m:
             out.append((i, len(m.group(1)), m.group(2)))
             para = []
@@ -292,22 +312,44 @@ def anchors_for(path):
         lines = read_lines(path)
         for _, text in prose(lines):
             slugs.update(HTML_ANCHOR_RE.findall(text))
-        for _, _, text in heading_list(lines):
-            base = github_slug(text)
-            n = counts.get(base, 0)
-            slugs.add(base if n == 0 else f"{base}-{n}")
-            counts[base] = n + 1
+        for _, _, text in heading_list(lines, nested=True):
+            # Number repeats as GitHub does: Foo, Foo, Foo 1 -> foo, foo-1, foo-1-1.
+            base = slug = github_slug(text)
+            while slug in counts:
+                counts[base] += 1
+                slug = f"{base}-{counts[base]}"
+            counts[slug] = 0
+            slugs.add(slug)
         _anchor_cache[path] = {s.lower() for s in slugs}
     return _anchor_cache[path]
 
 
-def relative_links(lines):
+def label_key(label):
+    return " ".join(label.split()).lower()
+
+
+def used_labels(texts):
+    """Reference labels used by [text][label], [label][] or [label] links."""
+    used = set()
+    for text in texts:
+        if REF_DEF_RE.match(text):
+            continue
+        for m in REF_USE_RE.finditer(text):
+            label = (m.group(2) or m.group(1)) if m.group(1) is not None else m.group(3)
+            used.add(label_key(label))
+    return used
+
+
+def relative_links(lines, unused_definitions=True):
     """Yield (lineno, target) for every relative link, image and reference definition outside code
-    and HTML comments (readers cannot see or follow a link in a comment)."""
-    for lineno, text in prose(lines):
+    and HTML comments (readers cannot see or follow a link in a comment). Without
+    unused_definitions, definitions that no link uses (and so render nothing) are left out."""
+    entries = list(prose(lines))
+    used = None if unused_definitions else used_labels(text for _, text in entries)
+    for lineno, text in entries:
         targets = [m.group(1) if m.group(1) is not None else m.group(2) for m in LINK_RE.finditer(text)]
         ref = REF_DEF_RE.match(text)
-        if ref:
+        if ref and (used is None or label_key(re.match(r" {0,3}\[([^\]]+)\]", text).group(1)) in used):
             targets.append(ref.group(1) if ref.group(1) is not None else ref.group(2))
         for target in targets:
             if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
@@ -794,7 +836,7 @@ def check_links(root, rel, template_lines, report, lenient):
 def linked_paths(root, rel):
     path = os.path.join(root, rel)
     out = set()
-    for _, target in relative_links(read_lines(path)):
+    for _, target in relative_links(read_lines(path), unused_definitions=False):
         part = split_target(target)[0]
         if part:
             dest = resolve(root, os.path.dirname(path), part)

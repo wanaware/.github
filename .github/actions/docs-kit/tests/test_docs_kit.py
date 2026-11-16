@@ -138,6 +138,31 @@ class MarkdownHelpersTest(unittest.TestCase):
                          [(1, 1, "Title"), (4, 2, "Section `code`"), (7, 2, "ATX section")])
         self.assertEqual(dk.headings(lines, 2), ["Section `code`", "ATX section"])
 
+    def test_anchors_match_github(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, "a.md")
+        with open(path, "w") as fh:
+            fh.write("## Foo\n\n## Foo\n\n## Foo 1\n\nIntro.\n\n  ## Indented\n\n> ## Quoted\n")
+        dk._anchor_cache.clear()
+        self.assertEqual(sorted(dk.anchors_for(path)), ["foo", "foo-1", "foo-1-1", "indented", "quoted"])
+        # Indented and quoted headings get anchors but are not the document's own sections.
+        with open(path) as fh:
+            self.assertEqual(dk.headings(fh.read().split("\n"), 2), ["Foo", "Foo", "Foo 1"])
+
+    def test_stray_comment_markers_inside_paragraphs_are_text(self):
+        links = lambda lines: [t for _, t in dk.relative_links(lines)]
+        self.assertEqual(links(["Use a <!-- marker.", "", "See [x](x.md)."]), ["x.md"])
+        self.assertEqual(links(["A <!-- comment", "that closes --> then [y](y.md)."]), ["y.md"])
+        self.assertEqual(links(["<!-- a block comment that never closes", "", "[z](z.md)"]), [])
+
+    def test_unused_reference_definitions_do_not_count_as_service_links(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with open(os.path.join(d, "README.md"), "w") as fh:
+            fh.write("[A][a], [b][], [C].\n\n[a]: a.md\n[b]: b.md\n[c]: c.md\n[unused]: d.md\n")
+        self.assertEqual(sorted(dk.linked_paths(d, "README.md")), ["a.md", "b.md", "c.md"])
+
     def test_definitions_are_not_setext_headings(self):
         lines = ["Intro.", "", "[guide]: README.md", "---", "", "[^1]: A footnote.", "---", "",
                  "[ref]: x.md", "Real title", "=========="]

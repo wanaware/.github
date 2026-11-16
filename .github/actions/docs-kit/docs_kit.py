@@ -107,11 +107,23 @@ def read_lines(path):
 
 
 def scan(lines):
-    """Yield (lineno, line, info, delimiter) for every line.
+    """Yield (lineno, line, info, delimiter) for every line (see _scan)."""
+    for i, line, info, delimiter, _ in _scan(lines):
+        yield i, line, info, delimiter
+
+
+def comment_block_lines(lines):
+    """Line numbers that belong to an HTML comment block (hidden on GitHub)."""
+    return {i for i, _, _, _, hidden in _scan(lines) if hidden}
+
+
+def _scan(lines):
+    """Yield (lineno, line, info, delimiter, comment_block) for every line.
 
     info is None outside fenced code blocks. Inside one, including its opening and
     closing fence lines, it is the opening fence's info string ("" when there is
     none), and delimiter says whether the line is one of the fence lines.
+    comment_block says whether the line belongs to an HTML comment block.
 
     Follows CommonMark closely enough for these checks:
     - A fence opens on a run of three or more backticks or tildes indented at
@@ -134,7 +146,7 @@ def scan(lines):
         text = line.expandtabs(4)
         if fence is None and html_comment:
             html_comment = "-->" not in text
-            yield i, line, None, False
+            yield i, line, None, False, True
             continue
         indent = len(text) - len(text.lstrip(" "))
         m = FENCE_RE.match(text)
@@ -144,7 +156,7 @@ def scan(lines):
                        and not m.group(3).strip() and indent <= base + 3)
             if closing:
                 fence = None
-            yield i, line, info, bool(closing)
+            yield i, line, info, bool(closing), False
             continue
         if text.strip():
             while containers and indent < containers[-1]:
@@ -160,16 +172,17 @@ def scan(lines):
                 item = LIST_ITEM_RE.match(text[pos:]) if 1 <= gap <= 4 else None
         base = containers[-1] if containers else 0
         # An HTML comment block opens like a fence: at most three spaces beyond the container.
+        # It runs to the line holding "-->" (the same line, or a later one), all of it raw HTML.
         opener = re.match(r" *<!--", text)
-        if opener and indent <= base + 3 and "-->" not in text[opener.end():]:
-            html_comment = True
-            yield i, line, None, False
+        if opener and indent <= base + 3:
+            html_comment = "-->" not in text[opener.end():]
+            yield i, line, None, False, True
             continue
         if m and indent <= base + 3 and not (m.group(2)[0] == "`" and "`" in m.group(3)):
             fence = (m.group(2)[0], len(m.group(2)), base, m.group(3).strip())
-            yield i, line, fence[3], True
+            yield i, line, fence[3], True, False
             continue
-        yield i, line, None, False
+        yield i, line, None, False, False
 
 
 def outside_fences(lines):
@@ -195,17 +208,19 @@ def visible_lines(lines, keep_code=False, dequote=False):
             result.extend((quote[n - 1][0], text) for n, text in inner)
             quote.clear()
 
-    in_comment = False
-    for i, line, info, _ in scan(lines):
-        if dequote and info is None and not in_comment and QUOTE_RE.match(line):
+    in_comment = False  # an inline comment, inside a paragraph
+    for i, line, info, _, comment_block in _scan(lines):
+        if dequote and info is None and not comment_block and not in_comment and QUOTE_RE.match(line):
             quote.append((i, QUOTE_RE.sub("", line, count=1)))
             continue
         flush_quote()
         if info is not None:
             result.append((i, None))
             continue
+        if comment_block:  # the whole line is hidden HTML (blocks are found by _scan)
+            result.append((i, ""))
+            continue
         out, rest = "", line
-        block_start = re.match(r" {0,3}<!--", line) is not None
         while rest:
             if in_comment:
                 end = rest.find("-->")
@@ -221,7 +236,7 @@ def visible_lines(lines, keep_code=False, dequote=False):
                 rest = rest[code.end():]
             elif start < 0:
                 out, rest = out + rest, ""
-            elif (block_start and not out) or comment_closes(lines, i, rest[start + 4:]):
+            elif comment_closes(lines, i, rest[start + 4:]):
                 out, rest, in_comment = out + rest[:start], rest[start + 4:], True
             else:  # a stray "<!--" inside a paragraph is text, as on GitHub
                 out, rest = out + rest[:start + 4], rest[start + 4:]

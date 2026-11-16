@@ -223,6 +223,10 @@ class MarkdownHelpersTest(unittest.TestCase):
         # Inside a list item a comment is indented relative to the item's content.
         nested = ["- A bullet.", "", "    <!--", "    ```mermaid", "    graph TD", "    ```", "    -->", "", "Text."]
         self.assertEqual(dk.lint_mermaid(nested), [])
+        # ...and hides links in its examples too, even with a blank line inside the comment.
+        nested_links = ["- A bullet.", "", "    <!--", "", "    ```markdown", "    [sample](missing.md)",
+                        "    ```", "    -->", "", "[shown](shown.md)"]
+        self.assertEqual([t for _, t in dk.relative_links(nested_links)], ["shown.md"])
         # Indented four spaces outside a list it is code, not a comment: the fence there is not hidden.
         self.assertEqual(visible("    <!--\n```\ncode\n```\nafter"), [1, 5])
         # Comment markers inside a real code block are code.
@@ -230,7 +234,7 @@ class MarkdownHelpersTest(unittest.TestCase):
 
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
-                 "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]
+                 "Text <!-- [x](hidden.md) --> and [shown](real.md)", "[live]: live.md"]
         self.assertEqual([t for _, t in dk.relative_links(lines)], ["real.md", "live.md"])
 
     def test_comment_markers_in_code_spans_do_not_open_comments(self):
@@ -239,7 +243,10 @@ class MarkdownHelpersTest(unittest.TestCase):
         self.assertEqual([t for _, t in dk.relative_links(lines)], ["missing.md", "s.md"])
         self.assertEqual(list(dk.prose(["a `<!--` b <!-- c --> e `x` f"])), [(1, "a  b  e  f")])
         # Inside a comment there are no code spans: the comment ends at the first -->, as in HTML.
-        self.assertEqual(list(dk.prose(["<!-- c `-->` d"])), [(1, "` d")])
+        self.assertEqual(list(dk.prose(["a <!-- c `-->` d"])), [(1, "a ` d")])
+        # A line that starts with "<!--" is an HTML block up to the line with "-->", raw HTML
+        # to the end of that line, so nothing on it is Markdown.
+        self.assertEqual(list(dk.prose(["<!-- c --> [x](x.md)", "next"])), [(1, ""), (2, "next")])
 
     def test_link_destinations(self):
         lines = ["[a](../schema(v2).graphql) [b](<path with spaces.md>) [c](x.md \"title\")",

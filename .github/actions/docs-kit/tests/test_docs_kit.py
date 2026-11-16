@@ -188,6 +188,8 @@ class MarkdownHelpersTest(unittest.TestCase):
         self.assertEqual(links(["See the [architecture", "guide](a.md) and [b](", "b.md)."]),
                          [(1, "a.md"), (2, "b.md")])
         self.assertEqual(links(["![a diagram of", "the flow](flow.png)"]), [(1, "flow.png")])
+        # Destinations keep their spaces exactly (a file name may contain two).
+        self.assertEqual(links(["[d](<images/system  overview.png>)"]), [(1, "images/system  overview.png")])
         # A line break between "]" and "(" ends the link text: not a link, as on GitHub.
         self.assertEqual(links(["See [the guide]", "(missing.md)."]), [])
         # Brackets in different paragraphs never form a link.

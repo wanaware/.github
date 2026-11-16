@@ -378,7 +378,6 @@ def relative_links(lines, unused_definitions=True):
         if ref and (used is None or label_key(re.match(r" {0,3}\[([^\]]+)\]", text).group(1)) in used):
             found.append((lineno, offset, ref.group(1) if ref.group(1) is not None else ref.group(2)))
     for lineno, _, target in sorted(found):
-        target = " ".join(target.split()) if target else target
         if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
             yield lineno, target
 

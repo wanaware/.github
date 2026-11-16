@@ -124,6 +124,20 @@ class MarkdownHelpersTest(unittest.TestCase):
         line = "Write `` [sample](missing.md) `` or `[x](y.md)`, but [real](real.md) is a link."
         self.assertEqual([t for _, t in dk.relative_links([line])], ["real.md"])
 
+    def test_headings_github_renders(self):
+        lines = [
+            "Title", "=====", "",                      # 1  Setext H1
+            "Section `code`", "--------------", "",    # 4  Setext H2 (code kept for the slug)
+            "## ATX section", "",                      # 7
+            "Text before a rule.", "", "---", "",      # a rule after a blank line, not a heading
+            "- item", "---", "",                       # a rule after a list, not a heading
+            "<!--", "## Hidden", "-->", "",            # commented out
+            "```", "## Fenced", "```",                 # code
+        ]
+        self.assertEqual(dk.heading_list(lines),
+                         [(1, 1, "Title"), (4, 2, "Section `code`"), (7, 2, "ATX section")])
+        self.assertEqual(dk.headings(lines, 2), ["Section `code`", "ATX section"])
+
     def test_links_inside_html_comments_are_not_checked(self):
         lines = ["Text.", "<!--", "[old]: missing.md", "An old [inline](gone.md) link.", "-->",
                  "<!-- [x](hidden.md) --> but [shown](real.md)", "[live]: live.md"]
@@ -374,6 +388,18 @@ class SingleLayoutTest(RepoTestCase):
         self.assertEqual(self.errors(self.check()), [])
         self.write("docs/01-architecture.md", self.read("docs/01-architecture.md") + "\n[gone]: ../missing.yaml\n")
         self.assertEqual(self.errors(self.check()), [("LINK", "docs/01-architecture.md")])
+
+    def test_setext_anchors_root_relative_links_and_commented_headings(self):
+        self.scaffold()
+        self.fill_all()
+        self.write("README.md", "Example\n=======\n\n[Documentation](docs/README.md)\n\nSetup\n-----\n\n## Setup\n")
+        arch = self.read("docs/01-architecture.md")
+        self.write("docs/01-architecture.md", arch + "\n".join([
+            "", "[a](../README.md#example) [b](../README.md#setup) [c](../README.md#setup-1) [d](/README.md#setup)", ""]))
+        self.assertEqual(self.errors(self.check()), [])
+        self.write("docs/01-architecture.md", arch + "\n".join([
+            "", "<!--", "## Hidden section", "-->", "", "[h](#hidden-section) [m](/missing.md)", ""]))
+        self.assertEqual(sorted(code for code, _ in self.errors(self.check())), ["ANCHOR", "LINK"])
 
     def test_impossible_dates_fail(self):
         self.scaffold()

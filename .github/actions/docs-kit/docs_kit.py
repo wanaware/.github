@@ -67,6 +67,7 @@ REF_DEF_RE = re.compile(
     r'^ {0,3}\[(?!\^)[^\]]+\]:\s*(?:<([^<>\n]*)>|(\S+))'
     r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*$')
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")  # underline of a Setext heading
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
 INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")  # a span closes on the same run length
 FRONT_RE = re.compile(r"^<!--\s*docs-kit:(.*?)-->\s*$")
@@ -161,13 +162,17 @@ def outside_fences(lines):
             yield i, line
 
 
-def prose(lines):
-    """Yield (lineno, text) outside fences, with HTML comments and inline code removed.
+def visible_lines(lines, keep_code=False):
+    """Yield (lineno, text) for every line, with HTML comments removed and text None inside
+    fenced code. Inline code is kept (keep_code) or removed.
 
     Reads each line left to right, so a comment marker inside a code span (Write `<!--` to
     start a comment) is example text, not the start of a comment."""
     in_comment = False
-    for i, line in outside_fences(lines):
+    for i, line, info, _ in scan(lines):
+        if info is not None:
+            yield i, None
+            continue
         out, rest = "", line
         while rest:
             if in_comment:
@@ -180,12 +185,20 @@ def prose(lines):
             start = rest.find("<!--")
             code = INLINE_CODE_RE.search(rest)
             if code and (start < 0 or code.start() < start):
-                out, rest = out + rest[:code.start()], rest[code.end():]
+                out = out + rest[:code.end() if keep_code else code.start()]
+                rest = rest[code.end():]
             elif start < 0:
                 out, rest = out + rest, ""
             else:
                 out, rest, in_comment = out + rest[:start], rest[start + 4:], True
         yield i, out
+
+
+def prose(lines):
+    """Yield (lineno, text) outside fences, with HTML comments and inline code removed."""
+    for i, text in visible_lines(lines):
+        if text is not None:
+            yield i, text
 
 
 def mermaid_blocks(lines):
@@ -205,13 +218,30 @@ def mermaid_blocks(lines):
     return blocks
 
 
-def headings(lines, level):
-    out = []
-    for _, line in outside_fences(lines):
-        m = HEADING_RE.match(line)
-        if m and len(m.group(1)) == level:
-            out.append(m.group(2))
+def heading_list(lines):
+    """[(lineno, level, text)] for the headings GitHub renders, in order: ATX (# Title) and
+    Setext (a paragraph underlined with === or ---), outside code and HTML comments."""
+    out, para = [], []
+    for i, text in visible_lines(lines, keep_code=True):
+        if text is None or not text.strip():
+            para = []
+            continue
+        m = HEADING_RE.match(text)
+        if m:
+            out.append((i, len(m.group(1)), m.group(2)))
+            para = []
+        elif SETEXT_RE.match(text) and para:
+            out.append((para[0][0], 1 if text.strip()[0] == "=" else 2, " ".join(t for _, t in para)))
+            para = []
+        elif LIST_ITEM_RE.match(text) or text.lstrip().startswith(">"):
+            para = []
+        else:
+            para.append((i, text.strip()))
     return out
+
+
+def headings(lines, level):
+    return [text for _, lvl, text in heading_list(lines) if lvl == level]
 
 
 def first_heading(lines):
@@ -257,14 +287,14 @@ _anchor_cache = {}
 def anchors_for(path):
     if path not in _anchor_cache:
         slugs, counts = set(), {}
-        for _, line in outside_fences(read_lines(path)):
-            slugs.update(HTML_ANCHOR_RE.findall(line))
-            m = HEADING_RE.match(line)
-            if m:
-                base = github_slug(m.group(2))
-                n = counts.get(base, 0)
-                slugs.add(base if n == 0 else f"{base}-{n}")
-                counts[base] = n + 1
+        lines = read_lines(path)
+        for _, text in prose(lines):
+            slugs.update(HTML_ANCHOR_RE.findall(text))
+        for _, _, text in heading_list(lines):
+            base = github_slug(text)
+            n = counts.get(base, 0)
+            slugs.add(base if n == 0 else f"{base}-{n}")
+            counts[base] = n + 1
         _anchor_cache[path] = {s.lower() for s in slugs}
     return _anchor_cache[path]
 
@@ -280,6 +310,14 @@ def relative_links(lines):
         for target in targets:
             if target and not re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
                 yield lineno, target
+
+
+def resolve(root, base, path):
+    """The file a link path points at: relative to the document, or to the repository root
+    when it starts with / (as GitHub resolves it)."""
+    if path.startswith("/"):
+        return os.path.normpath(os.path.join(root, path.lstrip("/")))
+    return os.path.normpath(os.path.join(base, path))
 
 
 def split_target(target):
@@ -734,7 +772,7 @@ def check_links(root, rel, template_lines, report, lenient):
     for lineno, target in relative_links(lines):
         checked += 1
         path_part, frag = split_target(target)
-        dest = path if not path_part else os.path.normpath(os.path.join(base, path_part))
+        dest = resolve(root, base, path_part) if path_part else path
         problem = None
         if not os.path.exists(dest):
             problem = ("LINK", f"{target} (not found)")
@@ -757,7 +795,7 @@ def linked_paths(root, rel):
     for _, target in relative_links(read_lines(path)):
         part = split_target(target)[0]
         if part:
-            dest = os.path.normpath(os.path.join(os.path.dirname(path), part))
+            dest = resolve(root, os.path.dirname(path), part)
             out.add(os.path.relpath(dest, root).replace(os.sep, "/"))
     return out
 

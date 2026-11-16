@@ -1,0 +1,386 @@
+"""Tests for docs_kit.py.
+
+Run from the repository root:
+
+    python3 -m unittest discover -s .github/actions/docs-kit/tests -v
+"""
+import contextlib
+import importlib.util
+import io
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.dont_write_bytecode = True  # keep __pycache__ out of the kit directory, which repositories copy from
+KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_spec = importlib.util.spec_from_file_location("docs_kit", os.path.join(KIT, "docs_kit.py"))
+dk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(dk)
+
+
+def visible(text):
+    """Line numbers that outside_fences reports as ordinary content."""
+    return [n for n, _ in dk.outside_fences(text.split("\n"))]
+
+
+def run(*argv):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        code = dk.main(list(argv))
+    return code, out.getvalue()
+
+
+def fill(text):
+    """Do what an author does to a scaffolded page: fill every placeholder, drop the comments."""
+    text = dk.COMMENT_RE.sub("", text)
+    text = text.replace(dk.DATE_TOKEN, "2026-11-16").replace(dk.SHA_TOKEN, "abc1234")
+    return dk.ANGLE_RE.sub(lambda m: "filled" if dk.is_placeholder(m.group(0)) else m.group(0), text)
+
+
+class OutsideFencesTest(unittest.TestCase):
+    """Ported from asset-pipeline scripts/test_check_docs.py."""
+
+    def test_simple_fence_is_skipped(self):
+        self.assertEqual(visible("before\n```bash\ncode\n```\nafter"), [1, 5])
+
+    def test_four_backtick_fence_contains_three_backtick_fences(self):
+        text = "\n".join(["intro", "````markdown", "## Example heading", "```mermaid", "flowchart LR",
+                          "```", "[link](missing.md)", "````", "## Real heading"])
+        self.assertEqual(visible(text), [1, 9])
+
+    def test_closing_fence_must_use_the_same_character(self):
+        self.assertEqual(visible("~~~\n```\nstill code\n~~~\nafter"), [5])
+
+    def test_line_with_text_after_fence_does_not_close(self):
+        self.assertEqual(visible("```\n``` not a closing fence\n```\nafter"), [4])
+
+    def test_fence_indented_under_a_list_item_is_skipped(self):
+        text = "\n".join(["10. Example:", "", "    ```markdown", "    [link](missing.md)", "    ```", "after"])
+        self.assertEqual(visible(text), [1, 2, 6])
+
+    def test_backtick_run_with_backticks_after_it_is_inline_code(self):
+        self.assertEqual(visible("``` `inline` ```\n[link](a.md)\nafter"), [1, 2, 3])
+
+    def test_tilde_fence_may_contain_backticks_in_its_info_string(self):
+        self.assertEqual(visible("~~~ aa ``` ~~~\ncode\n~~~\nafter"), [4])
+
+    def test_indented_sample_outside_a_list_is_not_a_fence(self):
+        text = "\n".join(["Syntax:", "", "    ```markdown", "", "See [real](real.md).", "## Real heading"])
+        self.assertEqual(visible(text), [1, 2, 3, 4, 5, 6])
+        self.assertEqual(dk.headings(text.split("\n"), 2), ["Real heading"])
+
+    def test_fence_in_a_nested_list_item_is_skipped(self):
+        text = "\n".join(["- outer", "  - inner", "", "      ```", "      [x](missing.md)", "      ```", "after"])
+        self.assertEqual(visible(text), [1, 2, 3, 7])
+
+    def test_fence_in_a_compact_nested_list_item_is_skipped(self):
+        for marker, indent in (("- - ", 6), ("1. - ", 7)):
+            with self.subTest(marker=marker):
+                pad = " " * indent
+                text = "\n".join([marker + "Example:", "", pad + "```", pad + "[x](missing.md)", pad + "```", "after"])
+                self.assertEqual(visible(text), [1, 2, 6])
+
+    def test_list_ends_before_indented_code(self):
+        self.assertEqual(visible("- item\n\nParagraph.\n\n    ```\n    code\nafter"), [1, 2, 3, 4, 5, 6, 7])
+
+    def test_closing_fence_indented_four_spaces_does_not_close(self):
+        self.assertEqual(visible("```\n    ```\ncode\n```\nafter"), [5])
+
+    def test_headings_inside_examples_are_not_anchors(self):
+        lines = ["# Title", "````markdown", "## Hidden", "```", "````", "## Shown"]
+        self.assertEqual(dk.headings(lines, 2), ["Shown"])
+
+
+class MarkdownHelpersTest(unittest.TestCase):
+    def test_mermaid_blocks_are_split_even_when_adjacent(self):
+        lines = ["```mermaid", "flowchart LR", "```", "```mermaid", "sequenceDiagram", "```", "```bash", "x", "```"]
+        blocks = dk.mermaid_blocks(lines)
+        self.assertEqual([(start, [l for _, l in body]) for start, body in blocks],
+                         [(1, ["flowchart LR"]), (4, ["sequenceDiagram"])])
+
+    def test_prose_drops_comments_and_inline_code(self):
+        lines = ["a <!-- one", "two --> b `<code>` c", "```", "<fenced>", "```"]
+        self.assertEqual(list(dk.prose(lines)), [(1, "a "), (2, " b  c")])
+
+    def test_placeholders_exclude_html_tags_and_autolinks(self):
+        for token in ("<br/>", "<br>", "<a name=\"x\">", "</td>", "<https://example.com>", "<!-- c -->"):
+            self.assertFalse(dk.is_placeholder(token), token)
+        for token in ("<one line>", "<service>", "<name>", "<a placeholder>"):
+            self.assertTrue(dk.is_placeholder(token), token)
+
+    def test_mermaid_lint(self):
+        doc = "\n".join([
+            "```mermaid", "graph TD", "  a --> b", "```",
+            "```mermaid", "sequenceDiagram", "  A->>B: hi", "```",
+            "```mermaid", "flowchart LR", "  style a fill:#f00", "  classDef x fill:#fff", "```",
+            "```mermaid", "%%{init: {}}%%", "flowchart LR", "```",
+            "```mermaid", "sequenceDiagram", "  autonumber", "  A->>B: ok", "```",
+        ])
+        messages = [m for _, m in dk.lint_mermaid(doc.split("\n"))]
+        self.assertTrue(any("'graph' is not allowed" in m for m in messages))
+        self.assertTrue(any("autonumber" in m for m in messages))
+        self.assertTrue(any("'style'" in m for m in messages))
+        self.assertTrue(any("classDef must not set colours" in m for m in messages))
+        self.assertTrue(any("%%{init}%%" in m for m in messages))
+        self.assertEqual(len(messages), 5)
+
+
+class RenderTest(unittest.TestCase):
+    def template(self, body, front='<!-- docs-kit: nav="Data model" managed -->'):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, "02-data-model.md")
+        with open(path, "w") as fh:
+            fh.write(front + "\n" + body)
+        return dk.Template(path)
+
+    def ctx(self, **kw):
+        base = {"NAME": "svc", "DOCS_ROOT": "../../../docs", "ROOT": "../../.."}
+        base.update(kw)
+        return base
+
+    def test_front_matter(self):
+        t = self.template("# x\n")
+        self.assertEqual((t.nav, t.managed, t.free_headings), ("Data model", True, False))
+        self.assertEqual(t.body, "# x\n")
+
+    def test_block_and_inline_conditionals(self):
+        body = "a{{#single}} S{{/single}}{{#monorepo}} M{{/monorepo}}\n{{#single}}\nonly single\n{{/single}}\nend"
+        t = self.template(body)
+        self.assertEqual(dk.render(t, self.ctx(), "single"), "a S\nonly single\nend\n")
+        self.assertEqual(dk.render(t, self.ctx(), "monorepo"), "a M\nend\n")
+
+    def test_tokens_and_docs_root(self):
+        t = self.template("# {{NAME}}\n[s]({{DOCS_ROOT}}/10-x.md)")
+        self.assertEqual(dk.render(t, self.ctx(), "monorepo"), "# svc\n[s](../../../docs/10-x.md)\n")
+        self.assertEqual(dk.render(t, self.ctx(DOCS_ROOT="."), "single"), "# svc\n[s](10-x.md)\n")
+
+    def test_mermaid_hexagons_are_not_tokens(self):
+        t = self.template('in{{"STREAM<br/>subject"}} --> svc')
+        self.assertEqual(dk.render(t, self.ctx(), "single"), 'in{{"STREAM<br/>subject"}} --> svc\n')
+
+    def test_unknown_token_and_unbalanced_blocks_fail(self):
+        for body in ("{{NOPE}}", "{{#single}}\nx", "{{/single}}", "{{#single}}\n{{/monorepo}}"):
+            with self.subTest(body=body), self.assertRaises(dk.KitError):
+                dk.render(self.template(body), self.ctx(), "single")
+
+
+class KitTemplatesTest(unittest.TestCase):
+    """The kit's own templates must be well-formed for both layouts."""
+
+    def test_every_template_has_front_matter_and_known_tokens(self):
+        for s in dk.TEMPLATE_SETS:
+            for t in dk.load_templates(os.path.join(KIT, s)):
+                with self.subTest(template=f"{s}/{t.name}"):
+                    with open(t.path) as fh:
+                        self.assertTrue(dk.FRONT_RE.match(fh.readline()), "missing docs-kit front matter")
+                    self.assertTrue(t.body.startswith("# {{NAME}}: "))
+
+    def test_numbered_headings(self):
+        for s in ("component", "platform"):
+            for t in dk.load_templates(os.path.join(KIT, s)):
+                with self.subTest(template=f"{s}/{t.name}"):
+                    h2 = dk.headings(t.body.split("\n"), 2)
+                    self.assertTrue(h2)
+                    self.assertEqual([h.split(". ")[0] for h in h2], [str(i) for i in range(1, len(h2) + 1)])
+
+    def test_sets_have_the_same_files(self):
+        names = lambda s: [t.name for t in dk.load_templates(os.path.join(KIT, s))]
+        self.assertEqual(names("component"), names("platform"))
+        self.assertEqual(names("shared"), ["09-glossary.md", "10-documentation-standards.md"])
+
+
+class RepoTestCase(unittest.TestCase):
+    def setUp(self):
+        dk._anchor_cache.clear()
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root)
+        self.write("README.md", "# repo\n\nSee [the documentation](docs/README.md).\n")
+
+    def path(self, rel):
+        return os.path.join(self.root, rel)
+
+    def write(self, rel, text):
+        os.makedirs(os.path.dirname(self.path(rel)) or ".", exist_ok=True)
+        with open(self.path(rel), "w") as fh:
+            fh.write(text)
+
+    def read(self, rel):
+        with open(self.path(rel)) as fh:
+            return fh.read()
+
+    def scaffold(self, *extra):
+        code, out = run("--root", self.root, "scaffold", "--repository", "wanaware/example", *extra)
+        self.assertEqual(code, 0, out)
+        return out
+
+    def check(self, lenient=False):
+        dk._anchor_cache.clear()
+        report = dk.Report()
+        dk.run_check(self.root, dk.load_config(self.root), report, lenient=lenient)
+        return report
+
+    def errors(self, report):
+        return [(code, path) for level, code, path, _, _ in report.items if level == "error"]
+
+    def fill_all(self):
+        for current, _, files in os.walk(self.root):
+            if os.sep + "templates" in current:
+                continue
+            for f in files:
+                p = os.path.join(current, f)
+                if f.endswith(".md") and dk.STANDARD_RE.match(f) and "10-documentation" not in f:
+                    with open(p) as fh:
+                        text = fh.read()
+                    with open(p, "w") as fh:
+                        fh.write(fill(text))
+
+
+class SingleLayoutTest(RepoTestCase):
+    def test_scaffold_creates_the_set_and_vendors_the_kit(self):
+        self.scaffold()
+        cfg = dk.load_config(self.root)
+        self.assertEqual((cfg["layout"], cfg["name"], cfg["repository"]), ("single", "example", "wanaware/example"))
+        for name in ["README.md"] + [f"0{i}-" for i in range(1, 9)]:
+            self.assertTrue(any(f.startswith(name) for f in os.listdir(self.path("docs"))), name)
+        self.assertTrue(os.path.isfile(self.path("docs/09-glossary.md")))
+        self.assertTrue(os.access(self.path("docs/templates/docs_kit.py"), os.X_OK))
+        self.assertFalse(os.path.exists(self.path("docs/templates/platform")))
+        readme = self.read("docs/README.md").split("\n")
+        self.assertEqual(readme[0], "# example: Overview")
+        self.assertTrue(readme[2].startswith("**Overview** · [Architecture](01-architecture.md)"))
+        self.assertTrue(readme[2].endswith("[Glossary](09-glossary.md) · [Standards](10-documentation-standards.md)"))
+        self.assertTrue(readme[4].startswith("> **Repository:** `wanaware/example` · **Last verified against source:**"))
+
+    def test_fresh_scaffold_fails_strict_only_on_placeholders_and_passes_lenient(self):
+        self.scaffold()
+        strict = self.check()
+        self.assertTrue(strict.count("error"))
+        self.assertEqual({code for code, _ in self.errors(strict)}, {"PLACEHOLDER"})
+        self.assertEqual(self.errors(self.check(lenient=True)), [])
+
+    def test_filled_documents_pass_strict(self):
+        self.scaffold()
+        self.fill_all()
+        report = self.check()
+        self.assertEqual(self.errors(report), [], report.items)
+        self.assertEqual(report.count("warning"), 0, report.items)
+
+    def test_scaffold_never_overwrites_and_refresh_replaces_managed_files(self):
+        self.scaffold()
+        self.write("docs/01-architecture.md", "mine\n")
+        self.write("docs/10-documentation-standards.md", "edited\n")
+        self.write("docs/templates/component/05-api.md", "custom\n")
+        out = self.scaffold()
+        self.assertIn("kept (differs from the kit", out)
+        self.assertEqual(self.read("docs/01-architecture.md"), "mine\n")
+        self.assertEqual(self.read("docs/10-documentation-standards.md"), "edited\n")
+        self.assertEqual(self.read("docs/templates/component/05-api.md"), "custom\n")
+        self.scaffold("--refresh")
+        self.assertEqual(self.read("docs/01-architecture.md"), "mine\n")
+        self.assertIn("Documentation Standards", self.read("docs/10-documentation-standards.md"))
+        self.assertIn("API Reference", self.read("docs/templates/component/05-api.md"))
+
+    def test_check_reports_structural_problems(self):
+        self.scaffold()
+        self.fill_all()
+        os.remove(self.path("docs/02-data-model.md"))
+        arch = self.read("docs/01-architecture.md")
+        arch = arch.replace("# example: Architecture", "# Example: Architecture")
+        arch = arch.replace("## 5. Concurrency and scaling model", "## 5. Scaling")
+        arch = arch.replace("**Architecture** · ", "Architecture · ")
+        arch += "\n[gone](missing.md) [bad anchor](README.md#no-such-heading) [ok](README.md#1-at-a-glance)\n"
+        arch += "\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n"
+        self.write("docs/01-architecture.md", arch)
+        self.write("docs/03-messaging.md", self.read("docs/03-messaging.md").replace(
+            "2026-11-16", "YYYY-MM-DD"))
+        codes = sorted({code for code, _ in self.errors(self.check())})
+        self.assertEqual(codes, ["ANCHOR", "HEADINGS", "LINK", "MERMAID", "MISSING", "NAV", "PLACEHOLDER", "TITLE"])
+
+    def test_managed_document_edits_are_reported_as_stale(self):
+        self.scaffold()
+        self.fill_all()
+        self.write("docs/10-documentation-standards.md", self.read("docs/10-documentation-standards.md") + "x\n")
+        report = self.check()
+        self.assertEqual(self.errors(report), [])
+        self.assertIn("STALE", [code for _, code, _, _, _ in report.items])
+
+    def test_check_without_adoption(self):
+        code, out = run("--root", self.root, "check")
+        self.assertEqual(code, 1)
+        self.assertIn("not adopted", out)
+        code, out = run("--root", self.root, "check", "--skip-if-missing")
+        self.assertEqual(code, 0)
+
+    def test_vendored_copy_runs_on_its_own(self):
+        self.scaffold()
+        self.fill_all()
+        out = subprocess.run(["python3", self.path("docs/templates/docs_kit.py"), "check"],
+                             capture_output=True, text=True, env={**os.environ, "GITHUB_ACTIONS": ""})
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("0 error(s)", out.stdout)
+
+
+class MonorepoLayoutTest(RepoTestCase):
+    def setUp(self):
+        super().setUp()
+        for svc in ("alpha", "beta"):
+            self.write(f"services/{svc}/README.md", f"# {svc}\n\n[Documentation](docs/README.md)\n")
+
+    def test_layout_is_detected_and_every_service_gets_a_set(self):
+        self.scaffold("--name", "Example Platform")
+        self.assertEqual(dk.load_config(self.root)["layout"], "monorepo")
+        alpha = self.read("services/alpha/docs/03-messaging.md").split("\n")
+        self.assertEqual(alpha[0], "# alpha: Messaging")
+        self.assertTrue(alpha[2].endswith("[Development](08-development.md) · [Platform docs](../../../docs/README.md)"))
+        self.assertTrue(alpha[4].startswith("> **Service:** `services/alpha` · **Last verified against source:**"))
+        root = self.read("docs/README.md")
+        self.assertIn("# Example Platform: Overview", root)
+        self.assertIn("> **Scope:** all services in this monorepo", root)
+        self.assertIn("[docs](../services/beta/docs/README.md)", root)
+        self.assertIn("[03](../services/alpha/docs/03-messaging.md)", root)
+
+    def test_filled_documents_pass_strict(self):
+        self.scaffold()
+        self.fill_all()
+        report = self.check()
+        self.assertEqual(self.errors(report), [], report.items)
+
+    def test_new_service_must_be_scaffolded_and_linked(self):
+        self.scaffold()
+        self.fill_all()
+        self.write("services/gamma/README.md", "# gamma\n\n[Documentation](docs/README.md)\n")
+        codes = {code for code, _ in self.errors(self.check())}
+        self.assertEqual(codes, {"MISSING", "UNLINKED"})
+        self.scaffold()  # adds gamma's docs; docs/README.md exists, so it is not rewritten
+        self.fill_all()
+        self.assertEqual({code for code, _ in self.errors(self.check())}, {"UNLINKED"})
+
+    def test_excluded_directories_are_skipped(self):
+        self.scaffold()
+        cfg_path = self.path("docs/templates/docs-kit.json")
+        self.write(cfg_path, self.read(cfg_path).replace('"exclude": []', '"exclude": ["beta"]'))
+        self.scaffold()
+        self.assertEqual([s.name for s in dk.doc_sets(self.root, dk.load_config(self.root),
+                                                      self.path("docs/templates"))], ["example", "alpha"])
+
+    def test_list_changed_documents_with_diagrams(self):
+        self.scaffold()
+        git = lambda *a: subprocess.run(["git", "-C", self.root, *a], check=True, capture_output=True)
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "base")
+        self.write("services/alpha/docs/03-messaging.md", self.read("services/alpha/docs/03-messaging.md") + "\nmore\n")
+        self.write("services/alpha/docs/05-api.md", self.read("services/alpha/docs/05-api.md") + "\nmore\n")
+        git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "change")
+        code, out = run("--root", self.root, "list", "--mermaid", "--changed-since", "HEAD~1")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.split(), ["services/alpha/docs/03-messaging.md"])
+
+
+if __name__ == "__main__":
+    unittest.main()

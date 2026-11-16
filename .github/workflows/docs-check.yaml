@@ -1,0 +1,84 @@
+name: Documentation Check
+
+# Reusable PR gate for the WanAware standard documentation set (the docs kit in
+# .github/actions/docs-kit). Checks that every standard document exists with its template's title,
+# navigation bar, metadata line and H2 headings, that no template placeholders are left, that relative
+# links and anchors resolve and that diagrams follow the conventions, then renders the Mermaid diagrams
+# in the documents the pull request changes.
+#
+# Callers (see workflow-templates/documentation.yml):
+#
+#   jobs:
+#     docs:
+#       uses: wanaware/.github/.github/workflows/docs-check.yaml@prod
+#
+# A repository that has not adopted the documentation yet (no docs/templates/docs-kit.json) gets a
+# warning, not a failure, until require_adoption is set.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "Escape-hatch override for runs-on. Leave empty (default) to run on the in-house dev ARC scale set (arc-shared-dev). The check needs no environment."
+        required: false
+        default: ""
+        type: string
+      allow_placeholders:
+        description: "Report unfilled template text (placeholders, guidance comments, unset metadata dates) as warnings instead of errors. Use while a repository is still filling in its scaffold."
+        required: false
+        default: false
+        type: boolean
+      all_links:
+        description: "Also check links in other Markdown files under the docs folders (READMEs next to the standard documents, guides)."
+        required: false
+        default: false
+        type: boolean
+      require_adoption:
+        description: "Fail when the repository has no docs/templates/docs-kit.json, instead of warning."
+        required: false
+        default: false
+        type: boolean
+      render_mermaid:
+        description: "Render the Mermaid diagrams in the standard documents the pull request changes, and fail on any that do not render."
+        required: false
+        default: true
+        type: boolean
+      python_version:
+        description: "Python version for the docs kit"
+        required: false
+        default: "3.14"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Check documentation
+    # In-house ARC (dev cluster runners), like the other PR checks.
+    runs-on: ${{ inputs.runner != '' && inputs.runner || 'arc-shared-dev' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the diagram render can diff against the pull request's base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Check documentation
+        uses: wanaware/.github/.github/actions/docs-kit@prod
+        with:
+          command: check
+          allow_placeholders: ${{ inputs.allow_placeholders }}
+          all_links: ${{ inputs.all_links }}
+          require_adoption: ${{ inputs.require_adoption }}
+          render_mermaid: ${{ inputs.render_mermaid }}
+          # Pull requests render only the documents they change; other events render every one.
+          base_sha: ${{ github.event.pull_request.base.sha }}

@@ -1,0 +1,51 @@
+# Standard documentation for this repository, from the WanAware docs kit in wanaware/.github.
+#
+#   - Pull requests into dev: checks the documentation (structure, placeholders, links, diagrams).
+#   - Merging this file into dev, or Actions → Documentation → Run workflow: opens a pull request that
+#     adds every missing standard document. Select "refresh" to also update the kit's own files.
+#
+# The rules are in docs/10-documentation-standards.md once the scaffold is merged.
+name: Documentation
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+    paths: ['.github/workflows/documentation.yml']
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: 'Also update the kit-managed files (docs/templates/, docs/10-documentation-standards.md)'
+        type: boolean
+        default: false
+      layout:
+        description: 'single, monorepo or auto (leave empty to keep the current setting)'
+        type: string
+        default: ''
+      name:
+        description: 'Name for repository-level titles, e.g. "Asset Pipeline" (leave empty to keep)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    uses: wanaware/.github/.github/workflows/docs-check.yaml@prod
+    # While the scaffolded documents are still being filled in:
+    # with:
+    #   allow_placeholders: true
+
+  scaffold:
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: wanaware/.github/.github/workflows/docs-scaffold.yaml@prod
+    with:
+      refresh: ${{ inputs.refresh == true }}
+      layout: ${{ inputs.layout || '' }}
+      name: ${{ inputs.name || '' }}

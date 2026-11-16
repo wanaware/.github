@@ -1,0 +1,172 @@
+name: 'Documentation kit'
+description: 'Scaffold or check the WanAware standard documentation set (docs/, and <services>/<service>/docs/ in monorepos)'
+
+# Used by the reusable workflows docs-check.yaml and docs-scaffold.yaml. Needs python3 on the
+# runner (the workflows install it with actions/setup-python). See README.md in this directory.
+
+inputs:
+  command:
+    description: 'check (structure, placeholders, links, diagrams) or scaffold (add missing documents and the kit files)'
+    required: true
+  path:
+    description: 'Repository root, relative to the workspace'
+    required: false
+    default: '.'
+  # check
+  allow_placeholders:
+    description: 'check: report unfilled template text as warnings instead of errors (for repositories still filling in their skeletons)'
+    required: false
+    default: 'false'
+  all_links:
+    description: 'check: also check links in other Markdown files under the docs folders'
+    required: false
+    default: 'false'
+  require_adoption:
+    description: 'check: fail when the repository has no docs/templates/docs-kit.json, instead of warning'
+    required: false
+    default: 'false'
+  render_mermaid:
+    description: 'check: render the Mermaid diagrams in changed documents with the Mermaid CLI and fail on any that do not render'
+    required: false
+    default: 'true'
+  base_sha:
+    description: 'check: render diagrams only in documents changed since this commit (empty: every document with diagrams)'
+    required: false
+    default: ''
+  mermaid_cli_version:
+    description: 'check: @mermaid-js/mermaid-cli version used to render diagrams'
+    required: false
+    default: '11.12.0'
+  node_version:
+    description: 'check: Node.js version for the Mermaid CLI'
+    required: false
+    default: '24'
+  # scaffold
+  layout:
+    description: 'scaffold: single, monorepo or auto (empty: keep the repository setting, or detect on first run)'
+    required: false
+    default: ''
+  name:
+    description: 'scaffold: name used in repository-level titles (empty: keep, or the repository name)'
+    required: false
+    default: ''
+  components_dir:
+    description: 'scaffold: directory holding one folder per service in a monorepo (empty: keep, or services)'
+    required: false
+    default: ''
+  branch:
+    description: 'scaffold: branch named in the metadata lines (empty: keep, or dev)'
+    required: false
+    default: ''
+  refresh:
+    description: 'scaffold: also replace the kit-managed files (docs/templates/ and docs/10-documentation-standards.md) with this version of the kit'
+    required: false
+    default: 'false'
+  summary_file:
+    description: 'scaffold: write the Markdown summary of created and kept files here'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check documentation
+      if: inputs.command == 'check'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        ALLOW_PLACEHOLDERS: ${{ inputs.allow_placeholders }}
+        ALL_LINKS: ${{ inputs.all_links }}
+        REQUIRE_ADOPTION: ${{ inputs.require_adoption }}
+      run: |
+        args=(--root . check --kit-dir "$GITHUB_ACTION_PATH")
+        [ "$ALLOW_PLACEHOLDERS" = "true" ] && args+=(--allow-placeholders)
+        [ "$ALL_LINKS" = "true" ] && args+=(--all-links)
+        [ "$REQUIRE_ADOPTION" = "true" ] || args+=(--skip-if-missing)
+        python3 "$GITHUB_ACTION_PATH/docs_kit.py" "${args[@]}"
+
+    - name: Set up Node.js for the Mermaid CLI
+      if: ${{ !cancelled() && inputs.command == 'check' && inputs.render_mermaid == 'true' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node_version }}
+
+    - name: Render Mermaid diagrams
+      if: ${{ !cancelled() && inputs.command == 'check' && inputs.render_mermaid == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        BASE_SHA: ${{ inputs.base_sha }}
+        MERMAID_CLI_VERSION: ${{ inputs.mermaid_cli_version }}
+      run: |
+        set -uo pipefail
+        list=(--root . list --mermaid)
+        [ -n "$BASE_SHA" ] && list+=(--changed-since "$BASE_SHA")
+        files=$(python3 "$GITHUB_ACTION_PATH/docs_kit.py" "${list[@]}") || exit 1
+        if [ -z "$files" ]; then
+          echo "No changed standard documents contain Mermaid diagrams."
+          exit 0
+        fi
+
+        # Failing to install or start the renderer is not a problem in the documents: warn and
+        # stop instead of failing the check, and say so in the log.
+        tool="$RUNNER_TEMP/mermaid-cli"
+        if ! npm install --no-save --no-audit --no-fund --loglevel=error --prefix "$tool" \
+            "@mermaid-js/mermaid-cli@$MERMAID_CLI_VERSION"; then
+          echo "::warning title=Mermaid not rendered::Could not install @mermaid-js/mermaid-cli@$MERMAID_CLI_VERSION; diagrams were not rendered"
+          exit 0
+        fi
+        mmdc="$tool/node_modules/.bin/mmdc"
+        out="$RUNNER_TEMP/mermaid-out"
+        mkdir -p "$out"
+        # Containers usually cannot use Chrome's sandbox.
+        printf '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > "$RUNNER_TEMP/puppeteer.json"
+        printf '```mermaid\nflowchart LR\n  a --> b\n```\n' > "$RUNNER_TEMP/mermaid-probe.md"
+        if ! "$mmdc" -q -p "$RUNNER_TEMP/puppeteer.json" -i "$RUNNER_TEMP/mermaid-probe.md" -o "$out/probe.md"; then
+          echo "::warning title=Mermaid not rendered::The Mermaid CLI could not start a browser on this runner; diagrams were not rendered"
+          exit 0
+        fi
+
+        failed=0
+        while IFS= read -r f; do
+          mkdir -p "$out/$(dirname "$f")"
+          if "$mmdc" -q -p "$RUNNER_TEMP/puppeteer.json" -i "$f" -o "$out/$f" > "$RUNNER_TEMP/mmdc.log" 2>&1; then
+            echo "Rendered $f"
+          else
+            failed=1
+            reason=$(grep -m1 -E 'Error|error' "$RUNNER_TEMP/mmdc.log" | cut -c1-300)
+            cat "$RUNNER_TEMP/mmdc.log"
+            echo "::error file=$f,title=docs MERMAID::A Mermaid diagram in this document does not render: ${reason:-see the job log}"
+          fi
+        done <<< "$files"
+        exit $failed
+
+    - name: Scaffold documentation
+      if: inputs.command == 'scaffold'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        LAYOUT: ${{ inputs.layout }}
+        NAME: ${{ inputs.name }}
+        COMPONENTS_DIR: ${{ inputs.components_dir }}
+        BRANCH: ${{ inputs.branch }}
+        REFRESH: ${{ inputs.refresh }}
+        SUMMARY_FILE: ${{ inputs.summary_file }}
+      run: |
+        args=(--root . scaffold)
+        [ -n "$LAYOUT" ] && args+=(--layout "$LAYOUT")
+        [ -n "$NAME" ] && args+=(--name "$NAME")
+        [ -n "$COMPONENTS_DIR" ] && args+=(--components-dir "$COMPONENTS_DIR")
+        [ -n "$BRANCH" ] && args+=(--branch "$BRANCH")
+        [ "$REFRESH" = "true" ] && args+=(--refresh)
+        [ -n "$SUMMARY_FILE" ] && args+=(--summary "$SUMMARY_FILE")
+        python3 "$GITHUB_ACTION_PATH/docs_kit.py" "${args[@]}"
+
+    - name: Reject an unknown command
+      if: inputs.command != 'check' && inputs.command != 'scaffold'
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+      run: |
+        echo "::error::Unknown docs-kit command '$COMMAND'; use check or scaffold"
+        exit 1

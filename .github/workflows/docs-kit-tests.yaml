@@ -1,0 +1,63 @@
+name: Docs Kit Tests
+
+# Tests the docs kit (.github/actions/docs-kit) and its workflows when they change: the unit tests,
+# then the action itself, from this branch, scaffolding and checking a sample monorepo.
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/docs-kit/**'
+      - '.github/workflows/docs-*.yaml'
+      - 'workflow-templates/documentation.*'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test the docs kit
+    # In-house ARC (dev cluster runners) — no GitHub-hosted execution.
+    runs-on: arc-shared-dev
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s .github/actions/docs-kit/tests -v
+
+      - name: Create a sample monorepo
+        run: |
+          mkdir -p "$RUNNER_TEMP/sample/services/alpha" "$RUNNER_TEMP/sample/services/beta"
+          printf '# sample\n\n[Documentation](docs/README.md)\n' > "$RUNNER_TEMP/sample/README.md"
+
+      - name: Scaffold the sample with the action
+        uses: ./.github/actions/docs-kit
+        with:
+          command: scaffold
+          path: ${{ runner.temp }}/sample
+          name: Sample Platform
+
+      - name: Check the sample with the action
+        uses: ./.github/actions/docs-kit
+        with:
+          command: check
+          path: ${{ runner.temp }}/sample
+          allow_placeholders: 'true'
+          require_adoption: 'true'
+          render_mermaid: 'true'
+
+      - name: A fresh scaffold must fail the strict check
+        working-directory: ${{ runner.temp }}/sample
+        run: |
+          if python3 docs/templates/docs_kit.py check > strict.log; then
+            echo "::error::the strict check passed on unfilled templates"
+            exit 1
+          fi
+          tail -1 strict.log

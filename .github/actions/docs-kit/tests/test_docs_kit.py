@@ -213,6 +213,30 @@ class MarkdownHelpersTest(unittest.TestCase):
         with open(dest) as fh:
             self.assertEqual(fh.read(), "```mermaid\nflowchart LR\n  a --> b\n```\n\n")
 
+    def test_indented_code_examples_are_code(self):
+        lines = ["Example:", "", "    [sample](missing.md) for <service>", "    more", "",
+                 "Text that wraps", "    onto an indented line with [real](real.md).", "",
+                 "- An item:", "", "      [item code](item-code.md)", "", "  [item text](item.md)", "",
+                 "## Heading", "    [after heading](code.md)"]
+        self.assertEqual([t for _, t in dk.relative_links(lines)], ["real.md", "item.md"])
+        self.assertEqual(list(dk.placeholder_tokens(lines)), [])
+        self.assertEqual(list(dk.code_placeholder_tokens(lines)), [(3, "<service>")])
+        # Fence handling is unchanged: indented code is not a fenced block.
+        self.assertEqual(visible("\n".join(lines[:4])), [1, 2, 3, 4])
+
+    def test_diagrams_in_block_quotes_are_linted_and_rendered(self):
+        lines = ["> Note:", ">", "> ```mermaid", "> flowchart LR", ">   a --> b", ">   style a fill:#f00",
+                 "> ```", "", "    > ```mermaid", "    > graph TD", "    > ```"]
+        self.assertEqual(dk.lint_mermaid(lines), [(6, "no 'style' statements in diagrams (no click handlers or colours)")])
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        src, dest = os.path.join(d, "a.md"), os.path.join(d, "out", "a.md")
+        with open(src, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        self.assertEqual(run("mermaid-source", src, dest)[0], 0)
+        with open(dest) as fh:
+            self.assertEqual(fh.read(), "```mermaid\nflowchart LR\n  a --> b\n  style a fill:#f00\n```\n\n")
+
     def test_fences_inside_html_comments_are_not_fences(self):
         # An unclosed fence inside a comment neither crashes nor hides the rest of the document.
         lines = ["<!--", "```mermaid", "graph TD", "-->", "", "[x](x.md)", "", "```mermaid", "graph LR", "```"]

@@ -28,7 +28,7 @@ The standard was introduced in Asset Pipeline (`docs: add documentation standard
 | [`tests/test_docs_kit.py`](tests/test_docs_kit.py) | [`scripts/test_check_docs.py`](https://github.com/wanaware/asset-pipeline/blob/6241560553e4f30849ec018607f003ca6d320294/scripts/test_check_docs.py) | Its fence tests are ported with the same cases (`OutsideFencesTest`); the other tests are new. |
 | Diagram rendering in [`action.yml`](action.yml) | The Mermaid CLI command in §8.1 of the standards (`@mermaid-js/mermaid-cli@11.12.0`) | The same tool and version, run in CI on the documents a pull request changes. |
 
-Checked against Asset Pipeline at that commit (83 documents, 3,252 relative links), the kit reports only the headings it generalized, listed above: "Position in the pipeline" in the eight service READMEs, and four repository-level documents. Asset Pipeline can adopt the kit by renaming those headings, or keep its own by editing its copy of the templates after the scaffold.
+Checked against Asset Pipeline at that commit (83 documents, 3,251 relative links), the kit reports only the headings it generalized, listed above: "Position in the pipeline" in the eight service READMEs, and four repository-level documents. Asset Pipeline can adopt the kit by renaming those headings, or keep its own by editing its copy of the templates after the scaffold.
 
 Asset Pipeline still has its own copies (`docs/templates/service/`, `scripts/check-docs.py`). Change the standard here from now on, so that every repository, Asset Pipeline included once it adopts the kit, gets the change through a refresh.
 
@@ -65,8 +65,8 @@ The scaffold detects the layout: a repository whose `services/` directory has tw
 | `TITLE`, `NAV`, `META` | The title (`# <name>: <suffix>`), navigation bar and metadata line match the template; the metadata line has a real date. |
 | `HEADINGS` | The H2 headings are exactly the template's, in order (not for the glossary and standards). |
 | `PLACEHOLDER` | No `<placeholder>` from the template, guidance comment, `TEMPLATE:` marker or unset date or commit is left. Warnings with `allow_placeholders`. |
-| `LINK`, `ANCHOR` | Relative links, reference definitions and `#anchors` in the standard documents resolve, as GitHub resolves them: `/path` from the repository root, anchors to `#` and underlined (Setext) headings, nothing inside code or HTML comments. |
-| `MERMAID` | Diagrams use the allowed types, `sequenceDiagram` starts with `autonumber`, and there are no `%%{init}%%` directives, `click`, `style` or colours. In CI, diagrams in changed documents must also render with the Mermaid CLI. |
+| `LINK`, `ANCHOR` | Relative links, reference definitions and `#anchors` in the standard documents resolve, as GitHub resolves them: `/path` from the repository root, anchors to `#` and underlined (Setext) headings, nothing inside code (fenced or indented) or HTML comments. |
+| `MERMAID` | Diagrams, block quotes included, use the allowed types, `sequenceDiagram` starts with `autonumber`, and there are no `%%{init}%%` directives, `click`, `style` or colours. In CI, diagrams in changed documents must also render with the Mermaid CLI. |
 | `UNLINKED` | In a monorepo, `docs/README.md` links every service's `docs/README.md`. |
 | `README`, `STALE`, `KIT` | Warnings and notices: a README that does not link its documentation, a hand-edited generated file, a repository copy of the kit that is older than this one. |
 

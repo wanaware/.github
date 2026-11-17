@@ -68,6 +68,7 @@ REF_DEF_RE = re.compile(
     r'(?:\s+(?:"[^"]*"|\'[^\']*\'|\([^()]*\)))?\s*$')
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")  # underline of a Setext heading
+THEMATIC_RE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")  # ---, ***, ___, - - -
 REF_USE_RE = re.compile(r"\[([^\[\]]+)\]\[([^\[\]]*)\]|\[([^\[\]]+)\](?![\[(:])")  # [t][l], [l][], [l]
 FOOTNOTE_DEF_RE = re.compile(r"^ {0,3}\[\^[^\]]+\]:")  # a footnote definition, any text after it
 HTML_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)="([^"]+)"', re.I)
@@ -114,16 +115,17 @@ def scan(lines):
 
 def comment_block_lines(lines):
     """Line numbers that belong to an HTML comment block (hidden on GitHub)."""
-    return {i for i, _, _, _, hidden in _scan(lines) if hidden}
+    return {i for i, _, _, _, block in _scan(lines) if block == "comment"}
 
 
 def _scan(lines):
-    """Yield (lineno, line, info, delimiter, comment_block) for every line.
+    """Yield (lineno, line, info, delimiter, block) for every line.
 
     info is None outside fenced code blocks. Inside one, including its opening and
     closing fence lines, it is the opening fence's info string ("" when there is
-    none), and delimiter says whether the line is one of the fence lines.
-    comment_block says whether the line belongs to an HTML comment block.
+    none), and delimiter says whether the line is one of the fence lines. block is
+    "comment" on the lines of an HTML comment block, "code" on the lines of an
+    indented code block, and None otherwise.
 
     Follows CommonMark closely enough for these checks:
     - A fence opens on a run of three or more backticks or tildes indented at
@@ -138,15 +140,18 @@ def _scan(lines):
     - An HTML comment that starts a line (indented like a fence, so within a list item
       relative to its content) runs to the line containing "-->", and nothing inside it
       is a fence, as GitHub hides it all.
+    - A line indented four or more spaces beyond its container is indented code, unless
+      it continues a paragraph (a line of text directly above it).
     """
     fence = None  # (character, length, container offset, info) of the open fence
     containers = []  # content offsets of the enclosing list items
     html_comment = False  # inside an HTML comment that started a line (GitHub hides it, fences too)
+    para = False  # the line above is paragraph text, which an indented line continues
     for i, line in enumerate(lines, 1):
         text = line.expandtabs(4)
         if fence is None and html_comment:
             html_comment = "-->" not in text
-            yield i, line, None, False, True
+            yield i, line, None, False, "comment"
             continue
         indent = len(text) - len(text.lstrip(" "))
         m = FENCE_RE.match(text)
@@ -156,33 +161,45 @@ def _scan(lines):
                        and not m.group(3).strip() and indent <= base + 3)
             if closing:
                 fence = None
-            yield i, line, info, bool(closing), False
+            yield i, line, info, bool(closing), None
             continue
-        if text.strip():
-            while containers and indent < containers[-1]:
-                containers.pop()
-            # A line can open several items at once ("- - item", "1. - item"),
-            # so read every list marker before the content.
-            pos = 0
-            item = LIST_ITEM_RE.match(text)
-            while item:
-                gap = len(item.group(3))
-                pos += len(item.group(1)) + len(item.group(2)) + (gap if 1 <= gap <= 4 else 1)
-                containers.append(pos)
-                item = LIST_ITEM_RE.match(text[pos:]) if 1 <= gap <= 4 else None
+        if not text.strip():
+            para = False
+            yield i, line, None, False, None
+            continue
+        while containers and indent < containers[-1]:
+            containers.pop()
+        if indent >= (containers[-1] if containers else 0) + 4 and not para:
+            yield i, line, None, False, "code"
+            continue
+        # A line can open several items at once ("- - item", "1. - item"),
+        # so read every list marker before the content.
+        pos = 0
+        item = LIST_ITEM_RE.match(text)
+        while item:
+            gap = len(item.group(3))
+            pos += len(item.group(1)) + len(item.group(2)) + (gap if 1 <= gap <= 4 else 1)
+            containers.append(pos)
+            item = LIST_ITEM_RE.match(text[pos:]) if 1 <= gap <= 4 else None
         base = containers[-1] if containers else 0
         # An HTML comment block opens like a fence: at most three spaces beyond the container.
         # It runs to the line holding "-->" (the same line, or a later one), all of it raw HTML.
         opener = re.match(r" *<!--", text)
         if opener and indent <= base + 3:
             html_comment = "-->" not in text[opener.end():]
-            yield i, line, None, False, True
+            para = False
+            yield i, line, None, False, "comment"
             continue
         if m and indent <= base + 3 and not (m.group(2)[0] == "`" and "`" in m.group(3)):
             fence = (m.group(2)[0], len(m.group(2)), base, m.group(3).strip())
-            yield i, line, fence[3], True, False
+            para = False
+            yield i, line, fence[3], True, None
             continue
-        yield i, line, None, False, False
+        # Text after a heading, an underline or a rule is not a paragraph an indented line continues.
+        content = text[pos:].strip()
+        para = bool(content) and not (HEADING_RE.match(content) or THEMATIC_RE.match(content)
+                                      or (para and SETEXT_RE.match(content)))
+        yield i, line, None, False, None
 
 
 def outside_fences(lines):
@@ -194,7 +211,7 @@ def outside_fences(lines):
 
 def visible_lines(lines, keep_code=False, dequote=False):
     """[(lineno, text)] for every line, with HTML comments removed and text None inside
-    fenced code. Inline code is kept (keep_code) or removed. With dequote, the content of a
+    code blocks (fenced or indented). Inline code is kept (keep_code) or removed. With dequote, the content of a
     block quote is read as Markdown in its own right (its "> " markers removed), so a code
     fence inside a quote is code too.
 
@@ -209,15 +226,15 @@ def visible_lines(lines, keep_code=False, dequote=False):
             quote.clear()
 
     in_comment = False  # an inline comment, inside a paragraph
-    for i, line, info, _, comment_block in _scan(lines):
-        if dequote and info is None and not comment_block and not in_comment and QUOTE_RE.match(line):
+    for i, line, info, _, block in _scan(lines):
+        if dequote and info is None and block is None and not in_comment and QUOTE_RE.match(line):
             quote.append((i, QUOTE_RE.sub("", line, count=1)))
             continue
         flush_quote()
-        if info is not None:
+        if info is not None or block == "code":
             result.append((i, None))
             continue
-        if comment_block:  # the whole line is hidden HTML (blocks are found by _scan)
+        if block == "comment":  # the whole line is hidden HTML (blocks are found by _scan)
             result.append((i, ""))
             continue
         out, rest = "", line
@@ -266,9 +283,21 @@ def prose(lines):
 
 def mermaid_blocks(lines):
     """Return [(first_lineno, [(lineno, line), ...])] for every visible ```mermaid block
-    (scan() does not see fences inside HTML comments, which GitHub hides)."""
-    blocks, current = [], None
-    for i, line, info, delimiter in scan(lines):
+    (scan() does not see fences inside HTML comments, which GitHub hides). GitHub also
+    renders diagrams inside block quotes; their lines are returned without the "> "."""
+    blocks, current, quote = [], None, []
+
+    def flush_quote():
+        if quote:
+            for start, body in mermaid_blocks([t for _, t in quote]):
+                blocks.append((quote[start - 1][0], [(quote[n - 1][0], l) for n, l in body]))
+            quote.clear()
+
+    for i, line, info, delimiter, block in _scan(lines):
+        if current is None and info is None and block is None and QUOTE_RE.match(line):
+            quote.append((i, QUOTE_RE.sub("", line, count=1)))
+            continue
+        flush_quote()
         is_mermaid = info is not None and info.split()[:1] == ["mermaid"]
         if delimiter and is_mermaid and current is None:
             current = (i, [])
@@ -277,6 +306,7 @@ def mermaid_blocks(lines):
             current = None
         elif current is not None:
             current[1].append((i, line))
+    flush_quote()
     if current is not None:
         blocks.append(current)
     return blocks
@@ -780,9 +810,9 @@ def placeholder_findings(want_text, lines):
 
 
 def code_placeholder_tokens(lines):
-    """Yield (lineno, token) for every <placeholder> inside fenced code blocks."""
-    for i, line, info, delimiter in scan(lines):
-        if info is not None and not delimiter:
+    """Yield (lineno, token) for every <placeholder> inside code blocks (fenced or indented)."""
+    for i, line, info, delimiter, block in _scan(lines):
+        if (info is not None and not delimiter) or block == "code":
             for token in re.findall(r"<[^<>\n]+>", line):
                 if is_placeholder(token):
                     yield i, token

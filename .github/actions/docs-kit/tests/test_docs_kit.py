@@ -223,6 +223,11 @@ class MarkdownHelpersTest(unittest.TestCase):
         self.assertEqual(list(dk.code_placeholder_tokens(lines)), [(3, "<service>")])
         # Fence handling is unchanged: indented code is not a fenced block.
         self.assertEqual(visible("\n".join(lines[:4])), [1, 2, 3, 4])
+        # A deeply indented line under paragraph text is more of the paragraph, never a heading
+        # or rule that would end it.
+        for marker in ("## literal text", "---", "- not an item"):
+            wrapped = ["Text that wraps", "    " + marker, "    [guide](missing.md)"]
+            self.assertEqual([t for _, t in dk.relative_links(wrapped)], ["missing.md"], marker)
 
     def test_diagrams_in_block_quotes_are_linted_and_rendered(self):
         lines = ["> Note:", ">", "> ```mermaid", "> flowchart LR", ">   a --> b", ">   style a fill:#f00",

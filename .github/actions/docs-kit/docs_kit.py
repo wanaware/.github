@@ -141,7 +141,8 @@ def _scan(lines):
       relative to its content) runs to the line containing "-->", and nothing inside it
       is a fence, as GitHub hides it all.
     - A line indented four or more spaces beyond its container is indented code, unless
-      it continues a paragraph (a line of text directly above it).
+      it continues a paragraph (a line of text directly above it). Then it is more of that
+      paragraph, even if it looks like a heading, a rule or a list item.
     """
     fence = None  # (character, length, container offset, info) of the open fence
     containers = []  # content offsets of the enclosing list items
@@ -169,8 +170,10 @@ def _scan(lines):
             continue
         while containers and indent < containers[-1]:
             containers.pop()
-        if indent >= (containers[-1] if containers else 0) + 4 and not para:
-            yield i, line, None, False, "code"
+        if indent >= (containers[-1] if containers else 0) + 4:
+            # Indented code, or (directly under paragraph text) more of that paragraph: so
+            # deep a line never starts a heading, rule, list item, fence or comment.
+            yield i, line, None, False, None if para else "code"
             continue
         # A line can open several items at once ("- - item", "1. - item"),
         # so read every list marker before the content.

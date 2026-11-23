@@ -130,9 +130,11 @@ jobs:
           context: ${{ inputs.docker_context }}
           file: ${{ inputs.docker_context }}/${{ inputs.dockerfile_path }}
           push: true
+          # GCP_REPOSITORY_SHARED (from the env's ci-workload Keeper record) picks the Artifact
+          # Registry repository; envs that don't set it keep wanaware-platform.
           tags: |
-            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:latest
-            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/wanaware-platform/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
+            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/${{ env.GCP_REPOSITORY_SHARED || 'wanaware-platform' }}/${{ inputs.image_path }}:latest
+            ${{ env.GCP_REGISTRY_SHARED }}/${{ env.GCP_PROJECT_SHARED }}/${{ env.GCP_REPOSITORY_SHARED || 'wanaware-platform' }}/${{ inputs.image_path }}:${{ steps.timestamp.outputs.value }}
           build-args: |
             GH_ACCESS_TOKEN=${{ env.GH_ACCESS_TOKEN }}
             GIT_SHA=${{ github.sha }}
@@ -149,7 +151,7 @@ jobs:
           TIMESTAMP_TAG: ${{ steps.timestamp.outputs.value }}
           PUSH_OUTCOME: ${{ steps.build_push.outcome }}
         run: |
-          BASE="$GCP_REGISTRY_SHARED/$GCP_PROJECT_SHARED/wanaware-platform/$IMAGE_PATH"
+          BASE="$GCP_REGISTRY_SHARED/$GCP_PROJECT_SHARED/${GCP_REPOSITORY_SHARED:-wanaware-platform}/$IMAGE_PATH"
           if [[ "$PUSH_OUTCOME" == "success" ]]; then
             echo "Pushed to shared registry: $BASE:latest, $BASE:$TIMESTAMP_TAG" >> "$GITHUB_STEP_SUMMARY"
           else

@@ -314,7 +314,11 @@ jobs:
 
       # --- Optional: NATS via in-cluster port-forward ---
       # Use when tests require in-cluster NATS state (e.g. shared streams, TLS, NKey auth).
-      # Adds /etc/hosts entry so TLS cert verification passes (cert SAN = nats.nats.svc).
+      # Adds an /etc/hosts entry so TLS cert verification passes against the cert SAN.
+      # Optional service-env keys pick the target, like DB_TUNNEL_*: NATS_TUNNEL_NAMESPACE,
+      # NATS_TUNNEL_SERVICE and NATS_TLS_HOSTNAME (a name in the server cert's SAN), and
+      # NATS_CA_PEM (the CA itself, when the cluster has no public nats-ca ConfigMap).
+      # Unset, they fall back to the old layout: nats/nats, nats.nats.svc, ConfigMap nats-ca.
       - name: Get GKE credentials for NATS tunnel
         if: ${{ inputs.use_nats_port_forward }}
         uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
@@ -329,8 +333,12 @@ jobs:
         if: ${{ inputs.use_nats_port_forward }}
         run: |
           set -euo pipefail
-          kubectl get configmap nats-ca -n nats -o jsonpath='{.data.ca\.crt}' \
-            > /tmp/nats-ca.crt
+          if [[ -n "${NATS_CA_PEM:-}" ]]; then
+            printf '%s\n' "$NATS_CA_PEM" > /tmp/nats-ca.crt
+          else
+            kubectl get configmap nats-ca -n nats -o jsonpath='{.data.ca\.crt}' \
+              > /tmp/nats-ca.crt
+          fi
           if [ ! -s /tmp/nats-ca.crt ]; then
             echo "NATS CA bundle came back empty"; exit 1
           fi
@@ -341,9 +349,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          TUNNEL_NS="${NATS_TUNNEL_NAMESPACE:-nats}"
+          TUNNEL_SVC="${NATS_TUNNEL_SERVICE:-nats}"
+          TLS_HOST="${NATS_TLS_HOSTNAME:-nats.nats.svc}"
+          echo "NATS_TLS_HOST=$TLS_HOST" >> $GITHUB_ENV
           # Add hosts entry so TLS server name matches the cert SAN
-          echo "127.0.0.1 nats.nats.svc" | sudo tee -a /etc/hosts
-          nohup kubectl port-forward -n nats svc/nats \
+          echo "127.0.0.1 $TLS_HOST" | sudo tee -a /etc/hosts
+          nohup kubectl port-forward -n "$TUNNEL_NS" "svc/$TUNNEL_SVC" \
             "$NATS_PORT":4222 \
             > nats-pf.out 2> nats-pf.err < /dev/null &
           echo "NATS_PORT_FORWARD_PID=$!" >> $GITHUB_ENV
@@ -363,9 +375,9 @@ jobs:
           wait_time=5
           max_attempts=3
           for i in $(seq 1 $max_attempts); do
-            if nc -zv nats.nats.svc "$NATS_PORT"; then
+            if nc -zv "$NATS_TLS_HOST" "$NATS_PORT"; then
               echo "NATS server is reachable!"
-              echo "NATS_URL=tls://nats.nats.svc:$NATS_PORT" >> $GITHUB_ENV
+              echo "NATS_URL=tls://$NATS_TLS_HOST:$NATS_PORT" >> $GITHUB_ENV
               exit 0
             fi
             echo "Attempt $i failed. Waiting ${wait_time}s..."

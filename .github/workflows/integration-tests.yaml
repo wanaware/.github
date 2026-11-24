@@ -415,8 +415,10 @@ jobs:
           if [ -z "$VAULT_KSA" ]; then
             echo "use_vault=true requires vault_ksa"; exit 1
           fi
-          # Convention: KSA <service>-ksa lives in namespace <service>.
-          ns="${VAULT_KSA_NAMESPACE:-${VAULT_KSA%-ksa}}"
+          # Convention: KSA <service>-ksa lives in namespace <service>. A service whose
+          # pods share a namespace (Core on dev-01) gets VAULT_KSA_NAMESPACE_DEFAULT from
+          # its CI env.
+          ns="${VAULT_KSA_NAMESPACE:-${VAULT_KSA_NAMESPACE_DEFAULT:-${VAULT_KSA%-ksa}}}"
 
           if [[ "${VAULT_ADDR:-}" == http://* ]]; then
             echo "VAULT_ADDR is plain HTTP; no CA bundle to fetch."

@@ -493,13 +493,17 @@ jobs:
         if: ${{ inputs.use_cloud_sql }}
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends netcat-openbsd
+          sudo apt-get install --yes --no-install-recommends netcat-openbsd socat
           TUNNEL_NS="${DB_TUNNEL_NAMESPACE:-tunnel}"
           TUNNEL_SVC="${DB_TUNNEL_SERVICE:-cloudsql-proxy-service}"
           TUNNEL_PORT="${DB_TUNNEL_PORT:-5432}"
-          echo "Tunnel: 127.0.0.1:$DB_PORT -> $TUNNEL_NS/svc/$TUNNEL_SVC:$TUNNEL_PORT"
-          nohup kubectl port-forward -n "$TUNNEL_NS" "svc/$TUNNEL_SVC" \
-            "$DB_PORT":"$TUNNEL_PORT" \
+          TUNNEL_HOST="$TUNNEL_SVC.$TUNNEL_NS.svc.cluster.local"
+          echo "Tunnel: 127.0.0.1:$DB_PORT -> $TUNNEL_HOST:$TUNNEL_PORT"
+          # The runner pod is in the cluster, so relay to the Service directly.
+          # kubectl port-forward drops every connection, and exits, as soon as
+          # Postgres resets one closed session ("lost connection to pod").
+          nohup socat "TCP-LISTEN:$DB_PORT,bind=127.0.0.1,fork,reuseaddr" \
+            "TCP:$TUNNEL_HOST:$TUNNEL_PORT" \
             > pf.out 2> pf.err < /dev/null &
           echo "PORT_FORWARD_PID=$!" >> $GITHUB_ENV
           # Wait for the local listener, tolerating proxy pod cold-start.

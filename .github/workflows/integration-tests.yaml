@@ -64,7 +64,7 @@ on:
         default: true
         type: boolean
       use_vault:
-        description: "Mint a ServiceAccount token so the service under test can authenticate to the in-cluster Vault. Requires GKE credentials. Sets VAULT_CACERT and VAULT_TOKEN_PATH; the caller still supplies VAULT_ADDR and VAULT_ROLE."
+        description: "Mint a ServiceAccount token so the service under test can authenticate to the in-cluster Vault. Requires GKE credentials. Sets VAULT_TOKEN_PATH, and VAULT_CACERT when VAULT_ADDR is https; the caller still supplies VAULT_ADDR and VAULT_ROLE."
         required: false
         default: false
         type: boolean
@@ -377,7 +377,7 @@ jobs:
 
       # --- Optional: Vault ---
       # Unlike NATS and Cloud SQL, Vault needs NO port-forward: runners are ARC
-      # pods inside the cluster, so https://vault.vault.svc:8200 resolves and is
+      # pods inside the cluster, so the in-cluster VAULT_ADDR resolves and is
       # reachable directly (no NetworkPolicies restrict it). The caller's
       # VAULT_ADDR is therefore already correct as-is.
       #
@@ -391,6 +391,11 @@ jobs:
       # The token is audience-scoped to "vault", matching the projected token
       # volume in modules/kubernetes and the role's bound audience. It cannot be
       # replayed against the Kubernetes API server.
+      #
+      # On dev-01 the server is OpenBao at http://openbao.nukleros-secrets-system.svc:8200,
+      # plain HTTP, so there is no CA to fetch. An http:// VAULT_ADDR skips the CA
+      # step; the token is minted the same way. VAULT_CA_NAMESPACE (optional, from
+      # the service env) moves the vault-ca ConfigMap lookup off the default "vault".
       - name: Get GKE credentials for Vault
         if: ${{ inputs.use_vault }}
         uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
@@ -413,12 +418,22 @@ jobs:
           # Convention: KSA <service>-ksa lives in namespace <service>.
           ns="${VAULT_KSA_NAMESPACE:-${VAULT_KSA%-ksa}}"
 
-          # A ConfigMap, not the vault-tls Secret: that Secret also holds the
-          # OpenBao server key, and CI has no access to Secrets.
-          kubectl get configmap vault-ca -n vault -o jsonpath='{.data.ca\.crt}' \
-            > /tmp/vault-ca.crt
-          if [ ! -s /tmp/vault-ca.crt ]; then
-            echo "Vault CA bundle came back empty"; exit 1
+          if [[ "${VAULT_ADDR:-}" == http://* ]]; then
+            echo "VAULT_ADDR is plain HTTP; no CA bundle to fetch."
+            # A CA path inherited from the service env is the pod's mount path,
+            # absent on a runner; the Vault client fails reading it even over HTTP.
+            if [ -n "${VAULT_CACERT:-}" ]; then
+              echo "VAULT_CACERT=" >> "$GITHUB_ENV"
+            fi
+          else
+            # A ConfigMap, not the vault-tls Secret: that Secret also holds the
+            # OpenBao server key, and CI has no access to Secrets.
+            kubectl get configmap vault-ca -n "${VAULT_CA_NAMESPACE:-vault}" \
+              -o jsonpath='{.data.ca\.crt}' > /tmp/vault-ca.crt
+            if [ ! -s /tmp/vault-ca.crt ]; then
+              echo "Vault CA bundle came back empty"; exit 1
+            fi
+            echo "VAULT_CACERT=/tmp/vault-ca.crt" >> "$GITHUB_ENV"
           fi
 
           # Duration must outlast the job: common/vault's renewal goroutine
@@ -431,7 +446,6 @@ jobs:
             --duration 7200s > /tmp/vault-token
           chmod 600 /tmp/vault-token
 
-          echo "VAULT_CACERT=/tmp/vault-ca.crt"    >> $GITHUB_ENV
           echo "VAULT_TOKEN_PATH=/tmp/vault-token" >> $GITHUB_ENV
           echo "Minted Vault token for $ns/$VAULT_KSA"
 
@@ -461,6 +475,12 @@ jobs:
       # cloudsql-proxy-service:5432 in ns tunnel) via kubectl port-forward,
       # reusing the same GCP_SERVICE_ACCOUNT / GKE-auth pattern deployment.yaml
       # uses for kubectl rollout restart.
+      #
+      # dev-01 has no shared proxy: each service runs its own CNPG cluster, whose
+      # rw Service (e.g. subscription-manager-subscription-manager-rw in ns
+      # wanaware-core) is the target. Optional service-env keys DB_TUNNEL_NAMESPACE,
+      # DB_TUNNEL_SERVICE and DB_TUNNEL_PORT pick it; unset, they fall back to the
+      # proxy above. The local end stays on DB_PORT, so DB_HOST=127.0.0.1 holds.
       - name: Get GKE credentials for DB tunnel
         if: ${{ inputs.use_cloud_sql }}
         uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
@@ -474,8 +494,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends netcat-openbsd
-          nohup kubectl port-forward -n tunnel svc/cloudsql-proxy-service \
-            "$DB_PORT":5432 \
+          TUNNEL_NS="${DB_TUNNEL_NAMESPACE:-tunnel}"
+          TUNNEL_SVC="${DB_TUNNEL_SERVICE:-cloudsql-proxy-service}"
+          TUNNEL_PORT="${DB_TUNNEL_PORT:-5432}"
+          echo "Tunnel: 127.0.0.1:$DB_PORT -> $TUNNEL_NS/svc/$TUNNEL_SVC:$TUNNEL_PORT"
+          nohup kubectl port-forward -n "$TUNNEL_NS" "svc/$TUNNEL_SVC" \
+            "$DB_PORT":"$TUNNEL_PORT" \
             > pf.out 2> pf.err < /dev/null &
           echo "PORT_FORWARD_PID=$!" >> $GITHUB_ENV
           # Wait for the local listener, tolerating proxy pod cold-start.

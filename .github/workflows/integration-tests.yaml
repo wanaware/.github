@@ -422,11 +422,9 @@ jobs:
 
           if [[ "${VAULT_ADDR:-}" == http://* ]]; then
             echo "VAULT_ADDR is plain HTTP; no CA bundle to fetch."
-            # A CA path inherited from the service env is the pod's mount path,
-            # absent on a runner; the Vault client fails reading it even over HTTP.
-            if [ -n "${VAULT_CACERT:-}" ]; then
-              echo "VAULT_CACERT=" >> "$GITHUB_ENV"
-            fi
+            # Services load VAULT_CACERT even over HTTP and fall back to the pod's
+            # mount path when it is empty, so point it at the runner's CA bundle.
+            echo "VAULT_CACERT=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
           else
             # A ConfigMap, not the vault-tls Secret: that Secret also holds the
             # OpenBao server key, and CI has no access to Secrets.
